@@ -13,6 +13,7 @@ Example messages it understands:
 
 import logging
 import re
+from typing import Optional
 
 import httpx
 
@@ -114,7 +115,7 @@ class TelegramQueryHandler:
 
         return "\n".join(lines)
 
-    def _extract_query_parts(self, text: str) -> tuple[str, str]:
+    def _extract_query_parts(self, text: str):
         """
         Extract (order_number, customer_name) from a free-text query.
         Order number = contiguous digit sequence (4–6 digits).
@@ -140,7 +141,7 @@ class TelegramQueryHandler:
     # ── Telegram API calls ─────────────────────────────────────────────────────
 
     async def _send_message(
-        self, chat_id: str, text: str, reply_to_message_id: int | None = None
+        self, chat_id: str, text: str, reply_to_message_id: Optional[int] = None
     ) -> None:
         payload: dict = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
         if reply_to_message_id:

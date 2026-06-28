@@ -89,7 +89,7 @@ class AirtableClient:
     async def search_orders_by_delivery_date(self, date_iso: str) -> list:
         """Return all Courier Required orders whose Delivery Date matches date_iso (YYYY-MM-DD)."""
         formula = (
-            f'AND({{Delivery Date}} = "{date_iso}", '
+            f'AND(DATESTR({{Delivery Date}}) = "{date_iso}", '
             f'{{Collection Method}} = "Courier Required")'
         )
         params = [

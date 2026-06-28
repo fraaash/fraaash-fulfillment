@@ -44,27 +44,38 @@ class AirtableClient:
         """Search Purchase Orders by order number and/or customer name."""
         filters = []
         if order_number:
-            filters.append(f'SEARCH("{order_number}", {{Order Number}})')
-            filters.append(f'SEARCH("{order_number}", {{Order No.}})')
+            # Exact match on the plain Order Number field (e.g. "00423")
+            filters.append(f'{{Order Number}} = "{order_number}"')
+            # Also match without leading zeros (user may type "423" instead of "00423")
+            stripped = order_number.lstrip("0")
+            if stripped and stripped != order_number:
+                filters.append(f'RIGHT({{Order Number}}, {len(stripped)}) = "{stripped}"')
         if customer_name:
-            # Search each word separately for flexibility
+            # Customer Name is multipleLookupValues; ARRAYJOIN flattens it to a searchable string
             for word in customer_name.split():
                 if len(word) >= 2:
-                    filters.append(f'SEARCH(LOWER("{word}"), LOWER({{Customer Name}}))')
+                    filters.append(
+                        f'FIND(LOWER("{word}"), LOWER(ARRAYJOIN({{Customer Name}}, " ")))'
+                    )
 
         if not filters:
             return []
 
         formula = f'OR({", ".join(filters)})'
         url = f"{AIRTABLE_BASE}/{self._base_id}/{TABLE_ID}"
-        params = {
-            "filterByFormula": formula,
-            "fields[]": [
-                "Order ID", "Order Number", "Order No.", "Customer Name",
-                "Airway Bill", "Tracking No. Message", "Process Status",
-                "Collection Method", "Delivery Date",
-            ],
-        }
+        # Pass fields[] as a list of tuples so httpx sends repeated params correctly
+        params = [
+            ("filterByFormula", formula),
+            ("fields[]", "Order ID"),
+            ("fields[]", "Order Number"),
+            ("fields[]", "Order No."),
+            ("fields[]", "Customer Name"),
+            ("fields[]", "Airway Bill"),
+            ("fields[]", "Tracking No. Message"),
+            ("fields[]", "Process Status"),
+            ("fields[]", "Collection Method"),
+            ("fields[]", "Delivery Date"),
+        ]
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(url, headers=self._headers, params=params)
             resp.raise_for_status()

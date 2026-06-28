@@ -233,10 +233,12 @@ class TelegramQueryHandler:
                     f"⚠️ No tracking message available yet (airway bill: `{airway_bill}`)"
                 )
         else:
-            # Return just the AWB / tracking number
+            # Return AWB / tracking number + status
+            status = f.get("Process Status") or "?"
             return (
                 f"📦 *Order:* {order_no}\n"
                 f"👤 *Customer:* {customer}\n"
+                f"📋 *Status:* {status}\n"
                 f"🏷 *Airway Bill:* `{airway_bill}`"
             )
 

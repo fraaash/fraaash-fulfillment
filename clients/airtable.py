@@ -86,6 +86,29 @@ class AirtableClient:
             resp.raise_for_status()
             return resp.json().get("records", [])
 
+    async def search_orders_by_delivery_date(self, date_iso: str) -> list:
+        """Return all Courier Required orders whose Delivery Date matches date_iso (YYYY-MM-DD)."""
+        formula = (
+            f'AND({{Delivery Date}} = "{date_iso}", '
+            f'{{Collection Method}} = "Courier Required")'
+        )
+        params = [
+            ("filterByFormula", formula),
+            ("fields[]", "Order ID"),
+            ("fields[]", "Order Number"),
+            ("fields[]", "Order No."),
+            ("fields[]", "Customer Name"),
+            ("fields[]", "Airway Bill"),
+            ("fields[]", "Tracking No. Message"),
+            ("fields[]", "Process Status"),
+            ("fields[]", "Delivery Date"),
+        ]
+        url = f"{AIRTABLE_BASE}/{self._base_id}/{TABLE_ID}"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=self._headers, params=params)
+            resp.raise_for_status()
+            return resp.json().get("records", [])
+
     async def get_webhook_payloads(self, webhook_id: str, cursor=None) -> dict:
         """Fetch pending webhook payloads starting from cursor."""
         url = (

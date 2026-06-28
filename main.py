@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 
 from clients.airtable import AirtableClient
 from handlers.fulfillment import FulfillmentHandler
+from handlers.telegram_query import TelegramQueryHandler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,8 +35,9 @@ logger = logging.getLogger(__name__)
 # (Airway Bill field must be empty) prevent duplicate purchases.
 CURSOR_FILE = Path("webhook_cursor.json")
 
-airtable = AirtableClient()
-handler  = FulfillmentHandler()
+airtable        = AirtableClient()
+handler         = FulfillmentHandler()
+telegram_handler = TelegramQueryHandler()
 
 
 # ── Cursor helpers ─────────────────────────────────────────────────────────────
@@ -118,5 +120,4 @@ async def airtable_webhook(request: Request, background_tasks: BackgroundTasks):
     except Exception as exc:
         logger.error(f"Error parsing webhook ping: {exc}")
 
-    # Always return 200 — Airtable retries on non-200 responses
-    return JSONResponse({"status": "received"}, status_code=200)
+    # Always retur

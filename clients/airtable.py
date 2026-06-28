@@ -40,7 +40,37 @@ class AirtableClient:
             logger.info(f"Airtable record {record_id} updated: {list(fields.keys())}")
             return data
 
-    async def get_webhook_payloads(self, webhook_id: str, cursor: int | None = None) -> dict:
+    async def search_orders(self, order_number: str = "", customer_name: str = "") -> list:
+        """Search Purchase Orders by order number and/or customer name."""
+        filters = []
+        if order_number:
+            filters.append(f'SEARCH("{order_number}", {{Order Number}})')
+            filters.append(f'SEARCH("{order_number}", {{Order No.}})')
+        if customer_name:
+            # Search each word separately for flexibility
+            for word in customer_name.split():
+                if len(word) >= 2:
+                    filters.append(f'SEARCH(LOWER("{word}"), LOWER({{Customer Name}}))')
+
+        if not filters:
+            return []
+
+        formula = f'OR({", ".join(filters)})'
+        url = f"{AIRTABLE_BASE}/{self._base_id}/{TABLE_ID}"
+        params = {
+            "filterByFormula": formula,
+            "fields[]": [
+                "Order ID", "Order Number", "Order No.", "Customer Name",
+                "Airway Bill", "Tracking No. Message", "Process Status",
+                "Collection Method", "Delivery Date",
+            ],
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=self._headers, params=params)
+            resp.raise_for_status()
+            return resp.json().get("records", [])
+
+    async def get_webhook_payloads(self, webhook_id: str, cursor=None) -> dict:
         """Fetch pending webhook payloads starting from cursor."""
         url = (
             f"{AIRTABLE_BASE}/bases/{self._base_id}"

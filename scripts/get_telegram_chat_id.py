@@ -4,7 +4,7 @@ Run this AFTER adding your bot to the ops/inventory group and sending
 any message in that group.
 
 Usage:
-  TELEGRAM_BOT_TOKEN=your_token python scripts/get_telegram_chat_id.py
+  python scripts/get_telegram_chat_id.py
 """
 
 import os
@@ -21,10 +21,9 @@ webhook_info = httpx.get(f"{BASE}/getWebhookInfo", timeout=15).json()
 existing_webhook = webhook_info.get("result", {}).get("url", "")
 
 if existing_webhook:
-    print(f"⚠️  Webhook detected: {existing_webhook}")
+    print(f"Webhook detected: {existing_webhook}")
     print("Temporarily removing it to fetch chat IDs...\n")
     httpx.post(f"{BASE}/deleteWebhook", timeout=15)
-    print("Webhook removed. Re-register it after this script finishes.\n")
     print(f"Your webhook URL to re-register: {existing_webhook}\n")
 
 resp = httpx.get(f"{BASE}/getUpdates", timeout=15)
@@ -39,11 +38,11 @@ if not updates:
     print("  3. Have NOT called getUpdates with offset before (clears history)")
 else:
     seen = set()
-    print("\nChats your bot has seen:\n")
+    print("Chats your bot has seen:\n")
     for u in updates:
-        msg  = u.get("message") or u.get("channel_post") or {}
+        msg = u.get("message") or u.get("channel_post") or {}
         chat = msg.get("chat", {})
-        cid  = chat.get("id")
+        cid = chat.get("id")
         if cid and cid not in seen:
             seen.add(cid)
             print(f"  Chat ID : {cid}")

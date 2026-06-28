@@ -46,10 +46,11 @@ F_POSTCODE        = "fldocjAjARRU1MxLW"
 F_PARCEL_DESC     = "fldGitxGp6zLKmf13"
 F_DELIVERY_DATE   = "fld6WCGUNpodRhoYM"
 
-STATUS_PENDING    = "Pending"
-STATUS_DELIVERED  = "Delivered"
-STATUS_COLLECTED  = "Collected"
-COURIER_REQUIRED  = "Courier Required"
+STATUS_PENDING     = "Pending"
+STATUS_IN_PROGRESS = "In Progress"
+STATUS_DELIVERED   = "Delivered"
+STATUS_COLLECTED   = "Collected"
+COURIER_REQUIRED   = "Courier Required"
 
 
 # ── Handler ────────────────────────────────────────────────────────────────────
@@ -79,17 +80,9 @@ class FulfillmentHandler:
     # ── New record ─────────────────────────────────────────────────────────────
 
     async def _handle_new_record(self, record_id: str, fields: dict) -> None:
-        status     = _choice(fields.get(F_STATUS))
-        collection = _choice(fields.get(F_COLLECTION))
-        airway_bill = fields.get(F_AIRWAY_BILL)
-
-        if (
-            collection == COURIER_REQUIRED
-            and status == STATUS_PENDING
-            and not airway_bill
-        ):
-            logger.info(f"[{record_id}] New courier order — purchasing airway bill")
-            await self._purchase_airway_bill(record_id, fields, use_field_ids=True)
+        # New records are never auto-processed — airway bill is only purchased
+        # when you manually move the order to "In Progress".
+        logger.info(f"[{record_id}] New order created — waiting for In Progress status")
 
     # ── Changed record ─────────────────────────────────────────────────────────
 
@@ -100,12 +93,28 @@ class FulfillmentHandler:
         curr_status = _choice(current.get(F_STATUS))
         prev_status = _choice(previous.get(F_STATUS))
 
+        # ── Trigger 1: status flipped Pending → In Progress ────────────────────
+        if (
+            curr_status == STATUS_IN_PROGRESS
+            and prev_status == STATUS_PENDING
+        ):
+            record = await self.airtable.get_record(record_id)
+            full   = record.get("fields", {})
+
+            if (
+                full.get("Collection Method") == COURIER_REQUIRED
+                and not full.get("Airway Bill")
+            ):
+                logger.info(f"[{record_id}] Status Pending → In Progress — purchasing airway bill")
+                await self._purchase_airway_bill(record_id, full, use_field_ids=False)
+            elif full.get("Collection Method") != COURIER_REQUIRED:
+                logger.info(f"[{record_id}] Status → In Progress but not Courier — skipping airway bill")
+
         # ── Trigger 2: status flipped to Delivered / Collected ─────────────────
         if (
             curr_status in (STATUS_DELIVERED, STATUS_COLLECTED)
             and prev_status not in (STATUS_DELIVERED, STATUS_COLLECTED)
         ):
-            # Need the full record (field names) to read formula fields
             record = await self.airtable.get_record(record_id)
             full   = record.get("fields", {})
 
@@ -119,26 +128,6 @@ class FulfillmentHandler:
                     )
                 else:
                     logger.warning(f"[{record_id}] Tracking No. Message is empty — skipping Telegram")
-
-        # ── Trigger 1 (edge case): Collection Method set to Courier on existing record ──
-        curr_collection = _choice(current.get(F_COLLECTION))
-        prev_collection = _choice(previous.get(F_COLLECTION))
-
-        if (
-            curr_collection == COURIER_REQUIRED
-            and prev_collection != COURIER_REQUIRED
-        ):
-            record = await self.airtable.get_record(record_id)
-            full   = record.get("fields", {})
-
-            if (
-                full.get("Process Status") == STATUS_PENDING
-                and not full.get("Airway Bill")
-            ):
-                logger.info(
-                    f"[{record_id}] Collection Method changed to Courier — purchasing airway bill"
-                )
-                await self._purchase_airway_bill(record_id, full, use_field_ids=False)
 
     # ── Airway bill purchase ───────────────────────────────────────────────────
 

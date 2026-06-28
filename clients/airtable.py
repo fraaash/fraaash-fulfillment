@@ -41,27 +41,32 @@ class AirtableClient:
             return data
 
     async def search_orders(self, order_number: str = "", customer_name: str = "") -> list:
-        """Search Purchase Orders by order number and/or customer name."""
-        filters = []
+        """Search Purchase Orders by order number and/or customer name.
+
+        Priority: if order_number is given, search only by that (much more precise).
+        Fall back to customer name only when no order number is provided.
+        """
         if order_number:
-            # Exact match on the plain Order Number field (e.g. "00423")
-            filters.append(f'{{Order Number}} = "{order_number}"')
-            # Also match without leading zeros (user may type "423" instead of "00423")
+            # Exact match on Order Number field (e.g. "00423")
+            num_filters = [f'{{Order Number}} = "{order_number}"']
+            # Also accept without leading zeros (user types "423" instead of "00423")
             stripped = order_number.lstrip("0")
             if stripped and stripped != order_number:
-                filters.append(f'RIGHT({{Order Number}}, {len(stripped)}) = "{stripped}"')
-        if customer_name:
-            # Customer Name is multipleLookupValues; ARRAYJOIN flattens it to a searchable string
+                num_filters.append(f'RIGHT({{Order Number}}, {len(stripped)}) = "{stripped}"')
+            formula = f'OR({", ".join(num_filters)})'
+        elif customer_name:
+            # No order number — search by customer name words (AND logic for precision)
+            name_filters = []
             for word in customer_name.split():
                 if len(word) >= 2:
-                    filters.append(
+                    name_filters.append(
                         f'FIND(LOWER("{word}"), LOWER(ARRAYJOIN({{Customer Name}}, " ")))'
                     )
-
-        if not filters:
+            if not name_filters:
+                return []
+            formula = f'AND({", ".join(name_filters)})'
+        else:
             return []
-
-        formula = f'OR({", ".join(filters)})'
         url = f"{AIRTABLE_BASE}/{self._base_id}/{TABLE_ID}"
         # Pass fields[] as a list of tuples so httpx sends repeated params correctly
         params = [

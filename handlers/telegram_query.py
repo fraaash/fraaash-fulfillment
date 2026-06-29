@@ -24,7 +24,7 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 TRIGGER_WORDS  = {"tracking", "track", "airway", "awb", "bill", "waybill"}
-UPDATE_WORDS   = {"update", "delivered", "changed", "set", "mark", "delivery"}
+UPDATE_WORDS   = {"update", "delivered", "changed", "set", "mark", "delivery", "sent", "ship", "shipped", "dispatch", "dispatched", "out"}
 DATE_WORDS    = {"today", "yesterday", "tomorrow"}
 MONTH_MAP     = {
     "january": 1, "february": 2, "march": 3, "april": 4,
@@ -211,7 +211,7 @@ class TelegramQueryHandler:
             return
 
         t = text.lower()
-        also_mark_delivered = "delivered" in t or "sent out" in t or "shipped" in t
+        also_mark_delivered = "delivered" in t or "sent" in t or "shipped" in t or "dispatched" in t
         date_label = target_date.strftime("%d %B %Y")
         updates: dict = {"Delivery Date": target_date.isoformat()}
         if also_mark_delivered:

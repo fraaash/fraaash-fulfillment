@@ -23,7 +23,8 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-TRIGGER_WORDS = {"tracking", "track", "airway", "awb", "bill", "waybill"}
+TRIGGER_WORDS  = {"tracking", "track", "airway", "awb", "bill", "waybill"}
+UPDATE_WORDS   = {"update", "delivered", "changed", "set", "mark", "delivery"}
 DATE_WORDS    = {"today", "yesterday", "tomorrow"}
 MONTH_MAP     = {
     "january": 1, "february": 2, "march": 3, "april": 4,
@@ -56,11 +57,16 @@ class TelegramQueryHandler:
         text     = (message.get("text") or "").strip()
         msg_id   = message.get("message_id")
 
-        if chat_id == OPS_CHAT_ID and self._is_tracking_query(text):
-            if self._is_date_query(text):
-                await self._answer_date_query(chat_id, msg_id, text)
+        if chat_id == OPS_CHAT_ID:
+            if self._is_update_query(text):
+                await self._answer_update_query(chat_id, msg_id, text)
+            elif self._is_tracking_query(text):
+                if self._is_date_query(text):
+                    await self._answer_date_query(chat_id, msg_id, text)
+                else:
+                    await self._answer_tracking_query(chat_id, msg_id, text)
             else:
-                await self._answer_tracking_query(chat_id, msg_id, text)
+                await self._forward_to_pawbot(update)
         else:
             await self._forward_to_pawbot(update)
 
@@ -69,6 +75,15 @@ class TelegramQueryHandler:
     def _is_tracking_query(self, text: str) -> bool:
         words = set(re.findall(r"[a-zA-Z]+", text.lower()))
         return bool(words & TRIGGER_WORDS)
+
+    def _is_update_query(self, text: str) -> bool:
+        """True if the message wants to update an order's delivery date/status."""
+        words = set(re.findall(r"[a-zA-Z]+", text.lower()))
+        has_update = bool(words & UPDATE_WORDS)
+        has_order  = bool(re.search(r"\b\d{3,6}\b", text))
+        has_date   = bool(words & DATE_WORDS) or bool(words & set(MONTH_MAP.keys())) \
+                     or bool(re.search(r"\b\d{1,2}[\/\-]\d{1,2}\b", text))
+        return has_update and has_order and has_date
 
     def _is_date_query(self, text: str) -> bool:
         """True if the query is about orders on a specific date, not a single order."""
@@ -171,45 +186,113 @@ class TelegramQueryHandler:
 
         return None
 
+    # ── Update delivery date ───────────────────────────────────────────────────
+
+    async def _answer_update_query(self, chat_id: str, reply_to: int, text: str) -> None:
+        """Handle delivery date updates for one or multiple orders.
+
+        Examples:
+          "order 00422 delivered today"
+          "update 00422 delivery date to 29 June"
+          "we sent out 00422, 00423, 00424 today"
+        """
+        order_numbers = re.findall(r"\b(\d{3,6})\b", text)
+        if not order_numbers:
+            await self._send_message(chat_id, "❓ Please include at least one order number.", reply_to_message_id=reply_to)
+            return
+
+        target_date = self._extract_date(text)
+        if not target_date:
+            await self._send_message(
+                chat_id,
+                "❓ I couldn't understand the date. Try: *today*, *29 June*, or *29/6*.",
+                reply_to_message_id=reply_to,
+            )
+            return
+
+        t = text.lower()
+        also_mark_delivered = "delivered" in t or "sent out" in t or "shipped" in t
+        date_label = target_date.strftime("%d %B %Y")
+        updates: dict = {"Delivery Date": target_date.isoformat()}
+        if also_mark_delivered:
+            updates["Process Status"] = "Delivered"
+
+        ok_lines   = []
+        fail_lines = []
+
+        for order_number in order_numbers:
+            records = await self.airtable.search_orders(order_number=order_number)
+            if not records:
+                fail_lines.append(f"• ❌ *{order_number}* — not found")
+                continue
+            record    = records[0]
+            record_id = record["id"]
+            fields    = record.get("fields", {})
+            order_no  = fields.get("Order No.") or fields.get("Order Number") or order_number
+            customer  = _first(fields.get("Customer Name")) or "?"
+            await self.airtable.update_record(record_id=record_id, fields=updates)
+            ok_lines.append(f"• ✅ *{order_no}* — {customer}")
+            logger.info(f"Updated order {order_number}: {updates}")
+
+        status_note = " + status → *Delivered*" if also_mark_delivered else ""
+        summary = f"📅 Delivery Date → *{date_label}*{status_note}\n\n"
+        if ok_lines:
+            summary += "\n".join(ok_lines)
+        if fail_lines:
+            summary += "\n" + "\n".join(fail_lines)
+
+        await self._send_message(chat_id, summary, reply_to_message_id=reply_to)
+
     # ── Single-order answer ────────────────────────────────────────────────────
 
     async def _answer_tracking_query(self, chat_id: str, reply_to: int, text: str) -> None:
-        order_number, customer_name = self._extract_query_parts(text)
-        want_message = self._wants_tracking_message(text)
-        logger.info(
-            f"Tracking query — order_number={order_number!r}, "
-            f"customer_name={customer_name!r}, want_message={want_message}"
-        )
+        want_message  = self._wants_tracking_message(text)
+        order_numbers = re.findall(r"\b(\d{3,6})\b", text)
 
-        records = await self.airtable.search_orders(
-            order_number=order_number,
-            customer_name=customer_name,
-        )
-
-        if not records:
-            reply = (
-                "❌ No order found"
-                + (f" for order number *{order_number}*" if order_number else "")
-                + (f" / customer *{customer_name}*" if customer_name else "")
-                + ".\n\nPlease check the order number or name and try again."
-            )
-        elif len(records) == 1:
-            reply = self._format_record(records[0], want_message=want_message)
+        if order_numbers:
+            # One or more explicit order numbers — reply separately for each
+            for order_number in order_numbers:
+                records = await self.airtable.search_orders(order_number=order_number)
+                if not records:
+                    await self._send_message(
+                        chat_id,
+                        f"❌ Order *{order_number}* not found.",
+                        reply_to_message_id=reply_to,
+                    )
+                else:
+                    await self._send_message(
+                        chat_id,
+                        self._format_record(records[0], want_message=want_message),
+                        reply_to_message_id=reply_to,
+                    )
         else:
-            # Multiple matches — list them concisely
-            lines = [f"Found {len(records)} orders:\n"]
-            for r in records[:5]:
-                f = r.get("fields", {})
-                lines.append(
-                    f"• {f.get('Order No.') or f.get('Order Number', '?')} — "
-                    f"{_first(f.get('Customer Name'))} — "
-                    f"AWB: {f.get('Airway Bill') or '(not yet purchased)'}"
+            # No order number — search by customer name
+            _, customer_name = self._extract_query_parts(text)
+            logger.info(f"Tracking query by name — customer_name={customer_name!r}")
+            records = await self.airtable.search_orders(customer_name=customer_name)
+            if not records:
+                await self._send_message(
+                    chat_id,
+                    f"❌ No order found for customer *{customer_name}*.",
+                    reply_to_message_id=reply_to,
                 )
-            if len(records) > 5:
-                lines.append(f"...and {len(records) - 5} more. Please be more specific.")
-            reply = "\n".join(lines)
-
-        await self._send_message(chat_id, reply, reply_to_message_id=reply_to)
+            elif len(records) == 1:
+                await self._send_message(
+                    chat_id,
+                    self._format_record(records[0], want_message=want_message),
+                    reply_to_message_id=reply_to,
+                )
+            else:
+                lines = [f"Found {len(records)} orders for *{customer_name}*:\n"]
+                for r in records[:5]:
+                    f = r.get("fields", {})
+                    lines.append(
+                        f"• {f.get('Order No.') or f.get('Order Number', '?')} — "
+                        f"AWB: {f.get('Airway Bill') or '(not yet purchased)'}"
+                    )
+                if len(records) > 5:
+                    lines.append(f"...and {len(records) - 5} more. Please add an order number.")
+                await self._send_message(chat_id, "\n".join(lines), reply_to_message_id=reply_to)
 
     def _wants_tracking_message(self, text: str) -> bool:
         """Return True if the user asked for the full tracking message (not just the AWB number)."""

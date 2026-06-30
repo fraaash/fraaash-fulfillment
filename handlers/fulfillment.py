@@ -18,7 +18,7 @@ Airtable field IDs used (Purchase Orders table — tblMK2nWUx0XQIVjK):
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from clients.airtable import AirtableClient
 from clients.ninjavan import NinjaVanClient
@@ -64,6 +64,10 @@ class FulfillmentHandler:
 
     async def process_payload(self, payload: dict) -> None:
         """Route a single Airtable webhook payload to the correct handler."""
+        # Detect stale payloads (replayed after a service restart).
+        # We still process them to advance the cursor, but suppress Telegram sends.
+        is_stale = _is_stale_payload(payload, max_age_seconds=600)
+
         # ── Newly created records ──────────────────────────────────────────────
         created_tables = payload.get("createdTablesById", {})
         created_table  = created_tables.get(TABLE_ID, {})
@@ -75,7 +79,7 @@ class FulfillmentHandler:
         changed_tables = payload.get("changedTablesById", {})
         changed_table  = changed_tables.get(TABLE_ID, {})
         for record_id, change in changed_table.get("changedRecordsById", {}).items():
-            await self._handle_changed_record(record_id, change)
+            await self._handle_changed_record(record_id, change, is_stale=is_stale)
 
     # ── New record ─────────────────────────────────────────────────────────────
 
@@ -86,7 +90,7 @@ class FulfillmentHandler:
 
     # ── Changed record ─────────────────────────────────────────────────────────
 
-    async def _handle_changed_record(self, record_id: str, change: dict) -> None:
+    async def _handle_changed_record(self, record_id: str, change: dict, is_stale: bool = False) -> None:
         current  = change.get("current",  {}).get("cellValuesByFieldId", {})
         previous = change.get("previous", {}).get("cellValuesByFieldId", {})
 
@@ -121,11 +125,17 @@ class FulfillmentHandler:
             if full.get("Collection Method") == COURIER_REQUIRED:
                 tracking_msg = full.get("Tracking No. Message", "")
                 if tracking_msg:
-                    logger.info(f"[{record_id}] Status → {curr_status} — sending Telegram")
-                    await self.telegram.send_message(
-                        chat_id=settings.TELEGRAM_OPS_CHAT_ID,
-                        text=tracking_msg,
-                    )
+                    if is_stale:
+                        logger.info(
+                            f"[{record_id}] Status → {curr_status} — skipping Telegram "
+                            f"(stale payload, replayed after restart)"
+                        )
+                    else:
+                        logger.info(f"[{record_id}] Status → {curr_status} — sending Telegram")
+                        await self.telegram.send_message(
+                            chat_id=settings.TELEGRAM_OPS_CHAT_ID,
+                            text=tracking_msg,
+                        )
                 else:
                     logger.warning(f"[{record_id}] Tracking No. Message is empty — skipping Telegram")
 
@@ -224,3 +234,26 @@ def _safe_reference(text: str) -> str:
 def _safe_filename(text: str) -> str:
     """Make a string safe for use as a filename."""
     return re.sub(r"[^A-Za-z0-9\-_]", "_", text)[:40]
+
+
+def _is_stale_payload(payload: dict, max_age_seconds: int = 600) -> bool:
+    """Return True if the Airtable webhook payload is older than max_age_seconds.
+
+    Render's free tier wipes the filesystem on restart, losing the cursor file.
+    On the next ping, old payloads are replayed from the beginning. We detect
+    this by comparing the payload's timestamp to now — if it's older than
+    max_age_seconds (default 10 min) we treat it as stale and suppress
+    external side-effects like Telegram messages.
+    """
+    ts_str = payload.get("timestamp", "")
+    if not ts_str:
+        return False
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        if age > max_age_seconds:
+            logger.info(f"Stale payload detected — age {age:.0f}s > {max_age_seconds}s threshold")
+            return True
+    except Exception:
+        pass
+    return False

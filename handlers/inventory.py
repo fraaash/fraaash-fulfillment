@@ -386,9 +386,8 @@ class InventoryHandler:
     # ── Airtable HTTP ──────────────────────────────────────────────────────────
     @property
     def _headers(self) -> dict:
-        # ⚠️  Check your config.py — adjust AIRTABLE_API_KEY to match your setting name
         return {
-            "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
+            "Authorization": f"Bearer {settings.AIRTABLE_TOKEN}",
             "Content-Type": "application/json",
         }
 

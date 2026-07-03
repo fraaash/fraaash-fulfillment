@@ -55,6 +55,14 @@ class SharePointClient:
                     pdfs.append({"id": item["id"], "name": item["name"], "parentPath": AIRWAY_BILLS_ROOT})
                 elif item.get("folder"):
                     sub = item["name"]
+                    # Skip months before July 2026 (handled manually)
+                    try:
+                        month_num = int(sub.split(".")[0].strip())
+                        year_part = sub.rsplit(" ", 1)[-1]
+                        if year_part == "2026" and month_num < 7:
+                            continue
+                    except (ValueError, IndexError):
+                        pass
                     sr = await client.get(
                         f"{GRAPH_BASE}/sites/{site_id}/drives/{drive_id}"
                         f"/root:/{AIRWAY_BILLS_ROOT}/{sub}:/children",

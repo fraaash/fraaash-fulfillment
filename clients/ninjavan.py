@@ -7,7 +7,8 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-NV_BASE = "https://api.ninjavan.co/MY"
+NV_BASE       = "https://api.ninjavan.co/MY"
+NV_AUTH_BASE  = "https://aaa.ninjavan.co/MY"   # OAuth uses different subdomain
 
 
 class NinjaVanClient:
@@ -25,7 +26,7 @@ class NinjaVanClient:
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
-                f"{NV_BASE}/2.0/oauth/access_token",
+                f"{NV_AUTH_BASE}/2.0/oauth/access_token",
                 data={
                     "grant_type": "client_credentials",
                     "client_id": settings.NINJAVAN_CLIENT_ID,
@@ -123,7 +124,7 @@ class NinjaVanClient:
         async with httpx.AsyncClient(timeout=30.0) as client:
             # 1. Create order
             resp = await client.post(
-                f"{NV_BASE}/2.0/orders",
+                f"{NV_BASE}/4.2/orders",
                 headers=headers,
                 json=payload,
             )

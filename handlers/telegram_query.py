@@ -9,7 +9,7 @@ Example messages it understands:
   "awb 00423"
 """
 import logging
-import re
+import reh
 from datetime import date, timedelta
 from typing import Optional
 import httpx
@@ -40,7 +40,7 @@ class TelegramQueryHandler:
         self.inventory_handler = InventoryHandler()
 
     async def handle_update(self, update: dict) -> None:
-<<<<<<< Updated upstream
+
         """
         Entry point for every Telegram update.
         - Inventory queries → handled by InventoryHandler.
@@ -48,8 +48,8 @@ class TelegramQueryHandler:
         - Tracking queries → answered directly.
         - Everything else → forward to PawBot.
         """
-=======
->>>>>>> Stashed changes
+
+
         message = update.get("message") or update.get("edited_message")
         if not message:
             await self._forward_to_pawbot(update)
@@ -178,10 +178,10 @@ class TelegramQueryHandler:
 
     # ── Update delivery date ───────────────────────────────────────────────────
     async def _answer_update_query(self, chat_id: str, reply_to: int, text: str) -> None:
-<<<<<<< Updated upstream
+
         """Handle delivery date updates for one or multiple orders."""
-=======
->>>>>>> Stashed changes
+
+
         order_numbers = re.findall(r"\b(\d{3,6})\b", text)
         if not order_numbers:
             await self._send_message(chat_id, "❓ Please include at least one order number.", reply_to_message_id=reply_to)

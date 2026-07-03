@@ -40,6 +40,7 @@ class TelegramQueryHandler:
         self.inventory_handler = InventoryHandler()
 
     async def handle_update(self, update: dict) -> None:
+<<<<<<< Updated upstream
         """
         Entry point for every Telegram update.
         - Inventory queries → handled by InventoryHandler.
@@ -47,6 +48,8 @@ class TelegramQueryHandler:
         - Tracking queries → answered directly.
         - Everything else → forward to PawBot.
         """
+=======
+>>>>>>> Stashed changes
         message = update.get("message") or update.get("edited_message")
         if not message:
             await self._forward_to_pawbot(update)
@@ -77,7 +80,6 @@ class TelegramQueryHandler:
         return bool(words & TRIGGER_WORDS)
 
     def _is_update_query(self, text: str) -> bool:
-        """True if the message wants to update an order's delivery date/status."""
         words = set(re.findall(r"[a-zA-Z]+", text.lower()))
         has_update = bool(words & UPDATE_WORDS)
         has_order  = bool(re.search(r"\b\d{3,6}\b", text))
@@ -86,7 +88,6 @@ class TelegramQueryHandler:
         return has_update and has_order and has_date
 
     def _is_date_query(self, text: str) -> bool:
-        """True if the query is about orders on a specific date, not a single order."""
         words = set(re.findall(r"[a-zA-Z]+", text.lower()))
         has_date_word  = bool(words & DATE_WORDS) or bool(words & set(MONTH_MAP.keys()))
         has_date_nums  = bool(re.search(r"\b\d{1,2}[\/\-]\d{1,2}\b", text))
@@ -94,12 +95,11 @@ class TelegramQueryHandler:
 
     # ── Date-based answer ──────────────────────────────────────────────────────
     async def _answer_date_query(self, chat_id: str, reply_to: int, text: str) -> None:
-        """Handle 'send tracking numbers for orders delivered today/28 June/etc.'"""
         target_date = self._extract_date(text)
         if not target_date:
             await self._send_message(
                 chat_id,
-                "❓ I couldn't understand the date. Try: *today*, *yesterday*, *28 June*, or *28/6*.",
+                "❓ I couldn\'t understand the date. Try: *today*, *yesterday*, *28 June*, or *28/6*.",
                 reply_to_message_id=reply_to,
             )
             return
@@ -114,14 +114,14 @@ class TelegramQueryHandler:
         if not records:
             await self._send_message(
                 chat_id,
-                f"📭 No courier orders found for *{date_label}*.",
+                f"\U0001f4ed No courier orders found for *{date_label}*.",
                 reply_to_message_id=reply_to,
             )
             return
 
         await self._send_message(
             chat_id,
-            f"📦 Found *{len(records)}* courier order(s) for *{date_label}*:",
+            f"\U0001f4e6 Found *{len(records)}* courier order(s) for *{date_label}*:",
             reply_to_message_id=reply_to,
         )
 
@@ -130,7 +130,6 @@ class TelegramQueryHandler:
             await self._send_message(chat_id, msg)
 
     def _extract_date(self, text: str) -> Optional[date]:
-        """Parse a date from a natural language query. Returns a date object or None."""
         t = text.lower()
         today = date.today()
         if "today" in t:
@@ -179,7 +178,10 @@ class TelegramQueryHandler:
 
     # ── Update delivery date ───────────────────────────────────────────────────
     async def _answer_update_query(self, chat_id: str, reply_to: int, text: str) -> None:
+<<<<<<< Updated upstream
         """Handle delivery date updates for one or multiple orders."""
+=======
+>>>>>>> Stashed changes
         order_numbers = re.findall(r"\b(\d{3,6})\b", text)
         if not order_numbers:
             await self._send_message(chat_id, "❓ Please include at least one order number.", reply_to_message_id=reply_to)
@@ -189,7 +191,7 @@ class TelegramQueryHandler:
         if not target_date:
             await self._send_message(
                 chat_id,
-                "❓ I couldn't understand the date. Try: *today*, *29 June*, or *29/6*.",
+                "❓ I couldn\'t understand the date. Try: *today*, *29 June*, or *29/6*.",
                 reply_to_message_id=reply_to,
             )
             return
@@ -218,7 +220,7 @@ class TelegramQueryHandler:
             logger.info(f"Updated order {order_number}: {updates}")
 
         status_note = " + status → *Delivered*" if also_mark_delivered else ""
-        summary = f"📅 Delivery Date → *{date_label}*{status_note}\n\n"
+        summary = f"\U0001f4c5 Delivery Date → *{date_label}*{status_note}\n\n"
         if ok_lines:
             summary += "\n".join(ok_lines)
         if fail_lines:
@@ -265,8 +267,8 @@ class TelegramQueryHandler:
                 for r in records[:5]:
                     f = r.get("fields", {})
                     lines.append(
-                        f"• {f.get('Order No.') or f.get('Order Number', '?')} — "
-                        f"AWB: {f.get('Airway Bill') or '(not yet purchased)'}"
+                        f"• {f.get(\'Order No.\') or f.get(\'Order Number\', \'?\')} — "
+                        f"AWB: {f.get(\'Airway Bill\') or \'(not yet purchased)\'}"
                     )
                 if len(records) > 5:
                     lines.append(f"...and {len(records) - 5} more. Please add an order number.")
@@ -287,16 +289,16 @@ class TelegramQueryHandler:
                 return tracking_msg
             else:
                 return (
-                    f"📦 *{order_no}* — {customer}\n"
+                    f"\U0001f4e6 *{order_no}* — {customer}\n"
                     f"⚠️ No tracking message available yet (airway bill: `{airway_bill}`)"
                 )
         else:
             status = f.get("Process Status") or "?"
             return (
-                f"📦 *Order:* {order_no}\n"
-                f"👤 *Customer:* {customer}\n"
-                f"📋 *Status:* {status}\n"
-                f"🏷 *Airway Bill:* `{airway_bill}`"
+                f"\U0001f4e6 *Order:* {order_no}\n"
+                f"\U0001f464 *Customer:* {customer}\n"
+                f"\U0001f4cb *Status:* {status}\n"
+                f"\U0001f3f7 *Airway Bill:* `{airway_bill}`"
             )
 
     def _extract_query_parts(self, text: str):
@@ -325,7 +327,6 @@ class TelegramQueryHandler:
             resp.raise_for_status()
 
     async def _forward_to_pawbot(self, update: dict) -> None:
-        """Forward the raw update to PawBot's webhook so it keeps working."""
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 await client.post(PAWBOT_WEBHOOK, json=update)

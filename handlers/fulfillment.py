@@ -97,11 +97,11 @@ class FulfillmentHandler:
         curr_status = _choice(current.get(F_STATUS))
         prev_status = _choice(previous.get(F_STATUS))
 
-        # ── Trigger 1: status flipped Pending → In Progress ────────────────────
-        if (
-            curr_status == STATUS_IN_PROGRESS
-            and prev_status == STATUS_PENDING
-        ):
+        # ── Trigger 1: any status change → In Progress ────────────────────────
+        # We don't gate on prev_status == Pending because orders may start with
+        # a blank status (created via manual form) or come from another state.
+        # The Airway Bill emptiness check is the real idempotency guard.
+        if curr_status == STATUS_IN_PROGRESS and prev_status != STATUS_IN_PROGRESS:
             record = await self.airtable.get_record(record_id)
             full   = record.get("fields", {})
 
@@ -109,10 +109,12 @@ class FulfillmentHandler:
                 full.get("Collection Method") == COURIER_REQUIRED
                 and not full.get("Airway Bill")
             ):
-                logger.info(f"[{record_id}] Status Pending → In Progress — purchasing airway bill")
+                logger.info(f"[{record_id}] Status → In Progress (prev={prev_status!r}) — purchasing airway bill")
                 await self._purchase_airway_bill(record_id, full, use_field_ids=False)
             elif full.get("Collection Method") != COURIER_REQUIRED:
                 logger.info(f"[{record_id}] Status → In Progress but not Courier — skipping airway bill")
+            else:
+                logger.info(f"[{record_id}] Status → In Progress but Airway Bill already exists — skipping")
 
         # ── Trigger 2: status flipped to Delivered / Collected ─────────────────
         if (
@@ -206,7 +208,18 @@ class FulfillmentHandler:
             )
 
         except Exception as exc:
-            logger.error(f"[{record_id}] ❌ Airway bill purchase failed: {exc}", exc_info=True)
+            # Log the response body if it's an HTTP error — tells us WHY NinjaVan rejected
+            resp_body = ""
+            if hasattr(exc, "response") and exc.response is not None:
+                try:
+                    resp_body = exc.response.text
+                except Exception:
+                    pass
+            logger.error(
+                f"[{record_id}] ❌ Airway bill purchase failed: {exc}"
+                + (f"\nNinjaVan response body: {resp_body}" if resp_body else ""),
+                exc_info=True,
+            )
             raise
 
 

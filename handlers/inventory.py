@@ -23,7 +23,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Airtable constants ─────────────────────────────────────────────────────────
+# ââ Airtable constants âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 INV_BASE            = "app4Rm9ZIGWaFeCf4"
 INV_MOVEMENT_TABLE  = "tblSx11BYxubiGdHk"
 PRODUCTION_TABLE    = "tbl5BrwA9TxTWWt1c"
@@ -39,11 +39,11 @@ INGREDIENT_IDS = {
     "chicken_liver":  "recz9WtL78CvV9QSh",
 }
 
-# ── Telegram constants ─────────────────────────────────────────────────────────
+# ââ Telegram constants âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 TG_BASE     = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
 OPS_CHAT_ID = str(settings.TELEGRAM_OPS_CHAT_ID)
 
-# ── Trigger word sets ──────────────────────────────────────────────────────────
+# ââ Trigger word sets ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 STOCK_WORDS     = {"stock", "inventory", "available", "left", "remaining"}
 PRODUCT_WORDS   = {"bawk", "gulu", "chicken", "salmon", "bb", "gg"}
 PACKAGING_WORDS = {"foam", "sleeve", "label", "packaging", "ice", "tape", "card"}
@@ -63,14 +63,14 @@ MONTH_MAP = {
 class InventoryHandler:
     """Handles all inventory-related Telegram commands for the Fraaash ops group."""
 
-    # ── Detection ──────────────────────────────────────────────────────────────
+    # ââ Detection ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
     def is_inventory_query(self, text: str) -> bool:
         lower = text.lower()
         words = set(re.findall(r"[a-zA-Z]+", lower))
         return self._detect_intent(lower, words) is not None
 
     def _detect_intent(self, lower: str, words: set) -> Optional[str]:
-        # Order matters — more specific checks first
+        # Order matters â more specific checks first
         if self._is_production_actual(lower, words):  return "production_actual"
         if self._is_production_plan(lower, words):    return "production_plan"
         if self._is_inventory_out(lower, words):      return "inventory_out"
@@ -90,7 +90,7 @@ class InventoryHandler:
         has_out     = bool(words & OUT_WORDS)
         has_product = bool(words & PRODUCT_WORDS)
         has_qty     = bool(re.search(r"\b\d+\b", lower))
-        # 4-6 digit numbers are order IDs — leave those to the order handler
+        # 4-6 digit numbers are order IDs â leave those to the order handler
         has_order   = bool(re.search(r"\b\d{4,6}\b", lower))
         return has_out and has_product and has_qty and not has_order
 
@@ -103,13 +103,12 @@ class InventoryHandler:
     def _is_packaging_check(self, lower: str, words: set) -> bool:
         return bool(words & PACKAGING_WORDS) and bool(words & PKG_CHECK_WORDS)
 
-    # ── Main dispatcher ────────────────────────────────────────────────────────
+    # ââ Main dispatcher ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
     async def handle(self, chat_id: str, msg_id: int, text: str) -> None:
         lower  = text.lower()
         words  = set(re.findall(r"[a-zA-Z]+", lower))
         intent = self._detect_intent(lower, words)
         try:
-<<<<<<< Updated upstream
             if intent == "stock_query":       await self._stock_query(chat_id, msg_id, text)
             elif intent == "inventory_out":   await self._inventory_out(chat_id, msg_id, text)
             elif intent == "production_plan": await self._production_plan(chat_id, msg_id, text)
@@ -117,74 +116,48 @@ class InventoryHandler:
             elif intent == "packaging_check": await self._packaging_check(chat_id, msg_id)
             else:
                 await self._send(chat_id, (
-                    "❓ I couldn't understand that. Try:\n"
-=======
-            if intent == "stock_query":         await self._stock_query(chat_id, msg_id, text)
-            elif intent == "inventory_out":     await self._inventory_out(chat_id, msg_id, text)
-            elif intent == "production_plan":   await self._production_plan(chat_id, msg_id, text)
-            elif intent == "production_actual": await self._production_actual(chat_id, msg_id, text)
-            elif intent == "packaging_check":   await self._packaging_check(chat_id, msg_id)
-            else:
-                await self._send(chat_id, (
-                    "❓ I couldn\'t understand that. Try:\n"
->>>>>>> Stashed changes
-                    "• *how many bb left*\n"
-                    "• *19 BB and 18 GG delivered today*\n"
-                    "• *plan 50 BB 50 GG on 5 July*\n"
-                    "• *produced 48 BB 47 GG today*\n"
-                    "• *check packaging stock*"
+                    "â I couldn't understand that. Try:\n"
+                    "â¢ *how many bb left*\n"
+                    "â¢ *19 BB and 18 GG delivered today*\n"
+                    "â¢ *plan 50 BB 50 GG on 5 July*\n"
+                    "â¢ *produced 48 BB 47 GG today*\n"
+                    "â¢ *check packaging stock*"
                 ), msg_id)
         except Exception as exc:
             logger.error(f"InventoryHandler error (intent={intent}): {exc}", exc_info=True)
-            await self._send(chat_id, "⚠️ Something went wrong. Please try again.", msg_id)
+            await self._send(chat_id, "â ï¸ Something went wrong. Please try again.", msg_id)
 
-    # ── 1. Stock query ─────────────────────────────────────────────────────────
+    # ââ 1. Stock query âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
     async def _stock_query(self, chat_id: str, msg_id: int, text: str) -> None:
         lower = text.lower()
         words = set(re.findall(r"[a-zA-Z]+", lower))
         ask_product = bool(words & PRODUCT_WORDS) or not bool(words & PACKAGING_WORDS)
         ask_pkg     = bool(words & PACKAGING_WORDS) or not bool(words & PRODUCT_WORDS)
 
-<<<<<<< Updated upstream
-        lines = ["📦 *Fraaash Inventory*\n"]
-=======
-        lines = ["\U0001f4e6 *Fraaash Inventory*\n"]
->>>>>>> Stashed changes
+        lines = ["ð¦ *Fraaash Inventory*\n"]
 
         if ask_product:
             bb, gg = await self._get_product_stock()
             lines += [
-<<<<<<< Updated upstream
-                "*🐔 Product Stock:*",
-=======
-                "*\U0001f414 Product Stock:*",
->>>>>>> Stashed changes
-                f"• Bawk Bawk (BB): *{bb} boxes*",
-                f"• Gulu Gulu (GG): *{gg} boxes*",
+                "*ð Product Stock:*",
+                f"â¢ Bawk Bawk (BB): *{bb} boxes*",
+                f"â¢ Gulu Gulu (GG): *{gg} boxes*",
                 "",
             ]
         if ask_pkg:
             pkg = await self._get_packaging_stock()
-<<<<<<< Updated upstream
-            lines.append("*📦 Packaging Stock:*")
-=======
-            lines.append("*\U0001f4e6 Packaging Stock:*")
->>>>>>> Stashed changes
+            lines.append("*ð¦ Packaging Stock:*")
             for name, qty, reorder in pkg:
-                warn = " ⚠️ LOW" if reorder is not None and qty <= reorder else ""
-                lines.append(f"• {name}: *{qty}*{warn}")
+                warn = " â ï¸ LOW" if reorder is not None and qty <= reorder else ""
+                lines.append(f"â¢ {name}: *{qty}*{warn}")
 
         await self._send(chat_id, "\n".join(lines), msg_id)
 
-    # ── 2. Inventory out (delivery) ────────────────────────────────────────────
+    # ââ 2. Inventory out (delivery) ââââââââââââââââââââââââââââââââââââââââââââ
     async def _inventory_out(self, chat_id: str, msg_id: int, text: str) -> None:
         bb, gg = self._extract_bb_gg(text)
         if bb == 0 and gg == 0:
-<<<<<<< Updated upstream
-            await self._send(chat_id, "❓ Couldn't find quantities. Try: *19 BB and 18 GG delivered today*", msg_id)
-=======
-            await self._send(chat_id, "❓ Couldn\'t find quantities. Try: *19 BB and 18 GG delivered today*", msg_id)
->>>>>>> Stashed changes
+            await self._send(chat_id, "â Couldn't find quantities. Try: *19 BB and 18 GG delivered today*", msg_id)
             return
 
         target_date = self._extract_date(text) or date.today()
@@ -194,7 +167,7 @@ class InventoryHandler:
         fields: dict = {
             "fldnkV4GeBZmNe8Fy": date_iso,
             "fldESxOVa6nglAy0J": "Out",
-            "fldkGMAzNKJzDBYCS": f"Courier delivery – {date_label}",
+            "fldkGMAzNKJzDBYCS": f"Courier delivery â {date_label}",
         }
         if bb: fields["fld2O5oOrRAaABCr9"] = bb;  fields["fldUYRurduQ37qopd"] = bb * 6
         if gg: fields["fld2uxP8aLheTQwQN"] = gg;  fields["fldROm2Yl2Le2W7Vn"] = gg * 6
@@ -202,26 +175,17 @@ class InventoryHandler:
         await self._at_create(INV_MOVEMENT_TABLE, fields)
         new_bb, new_gg = await self._get_product_stock()
 
-        lines = [f"✅ *Inventory Out — {date_label}*", ""]
-<<<<<<< Updated upstream
-        if bb: lines.append(f"🐔 BB out: *{bb} boxes*")
-        if gg: lines.append(f"🐟 GG out: *{gg} boxes*")
-=======
-        if bb: lines.append(f"\U0001f414 BB out: *{bb} boxes*")
-        if gg: lines.append(f"\U0001f41f GG out: *{gg} boxes*")
->>>>>>> Stashed changes
-        lines += ["", "*Updated stock:*", f"• BB: *{new_bb} boxes*", f"• GG: *{new_gg} boxes*"]
+        lines = [f"â *Inventory Out â {date_label}*", ""]
+        if bb: lines.append(f"ð BB out: *{bb} boxes*")
+        if gg: lines.append(f"ð GG out: *{gg} boxes*")
+        lines += ["", "*Updated stock:*", f"â¢ BB: *{new_bb} boxes*", f"â¢ GG: *{new_gg} boxes*"]
         await self._send(chat_id, "\n".join(lines), msg_id)
 
-    # ── 3. Plan production batch ───────────────────────────────────────────────
+    # ââ 3. Plan production batch âââââââââââââââââââââââââââââââââââââââââââââââ
     async def _production_plan(self, chat_id: str, msg_id: int, text: str) -> None:
         bb, gg = self._extract_bb_gg(text)
         if bb == 0 and gg == 0:
-<<<<<<< Updated upstream
-            await self._send(chat_id, "❓ Couldn't find quantities. Try: *plan 50 BB 50 GG on 5 July*", msg_id)
-=======
-            await self._send(chat_id, "❓ Couldn\'t find quantities. Try: *plan 50 BB 50 GG on 5 July*", msg_id)
->>>>>>> Stashed changes
+            await self._send(chat_id, "â Couldn't find quantities. Try: *plan 50 BB 50 GG on 5 July*", msg_id)
             return
 
         target_date = self._extract_date(text) or date.today()
@@ -262,66 +226,37 @@ class InventoryHandler:
 
         eggs = math.ceil(ing["egg_yolk_kg"] * 1000 / 13)
         lines = [
-            f"✅ *{batch_id} planned — {date_label}*",
-<<<<<<< Updated upstream
-            f"🐔 BB: *{bb} boxes*  |  🐟 GG: *{gg} boxes*",
+            f"â *{batch_id} planned â {date_label}*",
+            f"ð BB: *{bb} boxes*  |  ð GG: *{gg} boxes*",
             "",
-            "📋 *Ingredients to buy:*",
+            "ð *Ingredients to buy:*",
             "",
-            "🏭 *Han Kee Processing* (POs logged as To Order):",
-            f"  • Chicken Breast: *{ing['chicken_breast_kg']} kg*",
-            f"  • Chicken Heart: *{ing['chicken_heart_kg']} kg*",
-            f"  • Chicken Liver: *{ing['chicken_liver_kg']} kg*",
+            "ð­ *Han Kee Processing* (POs logged as To Order):",
+            f"  â¢ Chicken Breast: *{ing['chicken_breast_kg']} kg*",
+            f"  â¢ Chicken Heart: *{ing['chicken_heart_kg']} kg*",
+            f"  â¢ Chicken Liver: *{ing['chicken_liver_kg']} kg*",
             "",
-            "🛒 *Other ingredients:*",
-            f"  • Salmon: *{ing['salmon_kg']} kg*",
-            f"  • Egg Yolk: *{ing['egg_yolk_kg']} kg* (~{eggs} eggs)",
-            f"  • Pumpkin: *{ing['pumpkin_kg']} kg*",
-            f"  • Carrot: *{ing['carrot_kg']} kg*",
-            f"  • Salmon Oil: *{ing['salmon_oil_g']} g*",
-            f"  • Feline Multivitamin: *{ing['multivitamin_g']} g*",
-            f"  • Eggshell Powder: *{ing['eggshell_g']} g*",
-            f"  • Taurine: *{ing['taurine_g']} g*",
+            "ð *Other ingredients:*",
+            f"  â¢ Salmon: *{ing['salmon_kg']} kg*",
+            f"  â¢ Egg Yolk: *{ing['egg_yolk_kg']} kg* (~{eggs} eggs)",
+            f"  â¢ Pumpkin: *{ing['pumpkin_kg']} kg*",
+            f"  â¢ Carrot: *{ing['carrot_kg']} kg*",
+            f"  â¢ Salmon Oil: *{ing['salmon_oil_g']} g*",
+            f"  â¢ Feline Multivitamin: *{ing['multivitamin_g']} g*",
+            f"  â¢ Eggshell Powder: *{ing['eggshell_g']} g*",
+            f"  â¢ Taurine: *{ing['taurine_g']} g*",
             "",
-            "📦 *Packaging needed:*",
-            f"  • Sleeve Labels: *{ing['sleeve_labels']} pcs*",
-            f"  • Packaging Boxes: *{ing['packaging_boxes']} pcs*",
-=======
-            f"\U0001f414 BB: *{bb} boxes*  |  \U0001f41f GG: *{gg} boxes*",
-            "",
-            "\U0001f4cb *Ingredients to buy:*",
-            "",
-            "\U0001f3ed *Han Kee Processing* (POs logged as To Order):",
-            f"  • Chicken Breast: *{ing[\'chicken_breast_kg\']} kg*",
-            f"  • Chicken Heart: *{ing[\'chicken_heart_kg\']} kg*",
-            f"  • Chicken Liver: *{ing[\'chicken_liver_kg\']} kg*",
-            "",
-            "\U0001f6d2 *Other ingredients:*",
-            f"  • Salmon: *{ing[\'salmon_kg\']} kg*",
-            f"  • Egg Yolk: *{ing[\'egg_yolk_kg\']} kg* (~{eggs} eggs)",
-            f"  • Pumpkin: *{ing[\'pumpkin_kg\']} kg*",
-            f"  • Carrot: *{ing[\'carrot_kg\']} kg*",
-            f"  • Salmon Oil: *{ing[\'salmon_oil_g\']} g*",
-            f"  • Feline Multivitamin: *{ing[\'multivitamin_g\']} g*",
-            f"  • Eggshell Powder: *{ing[\'eggshell_g\']} g*",
-            f"  • Taurine: *{ing[\'taurine_g\']} g*",
-            "",
-            "\U0001f4e6 *Packaging needed:*",
-            f"  • Sleeve Labels: *{ing[\'sleeve_labels\']} pcs*",
-            f"  • Packaging Boxes: *{ing[\'packaging_boxes\']} pcs*",
->>>>>>> Stashed changes
+            "ð¦ *Packaging needed:*",
+            f"  â¢ Sleeve Labels: *{ing['sleeve_labels']} pcs*",
+            f"  â¢ Packaging Boxes: *{ing['packaging_boxes']} pcs*",
         ]
         await self._send(chat_id, "\n".join(lines), msg_id)
 
-    # ── 4. Update actual production ────────────────────────────────────────────
+    # ââ 4. Update actual production ââââââââââââââââââââââââââââââââââââââââââââ
     async def _production_actual(self, chat_id: str, msg_id: int, text: str) -> None:
         bb, gg = self._extract_bb_gg(text)
         if bb == 0 and gg == 0:
-<<<<<<< Updated upstream
-            await self._send(chat_id, "❓ Couldn't find quantities. Try: *produced 48 BB 47 GG today*", msg_id)
-=======
-            await self._send(chat_id, "❓ Couldn\'t find quantities. Try: *produced 48 BB 47 GG today*", msg_id)
->>>>>>> Stashed changes
+            await self._send(chat_id, "â Couldn't find quantities. Try: *produced 48 BB 47 GG today*", msg_id)
             return
 
         target_date = self._extract_date(text) or date.today()
@@ -332,7 +267,7 @@ class InventoryHandler:
         if not batch:
             await self._send(
                 chat_id,
-                f"❌ No planned batch found for *{date_label}*.\n"
+                f"â No planned batch found for *{date_label}*.\n"
                 f"Create one first: *plan {bb} BB {gg} GG on {date_label}*",
                 msg_id,
             )
@@ -341,20 +276,14 @@ class InventoryHandler:
         batch_id     = batch["fields"].get("fldyCdkRmFuFhUXX0", "?")
         batch_rec_id = batch["id"]
 
-<<<<<<< Updated upstream
         # Mark batch completed with actual quantities
-=======
->>>>>>> Stashed changes
         await self._at_update(PRODUCTION_TABLE, batch_rec_id, {
             "fldexuMJ3JM5RAFTw": bb,
             "fldM1yMQ0h1Okxpa2": gg,
             "fldKTZYSlr63HIOHf": "Completed",
         })
 
-<<<<<<< Updated upstream
         # Log inventory In movement
-=======
->>>>>>> Stashed changes
         inv_fields: dict = {
             "fldnkV4GeBZmNe8Fy": date_iso,
             "fldESxOVa6nglAy0J": "In",
@@ -366,65 +295,46 @@ class InventoryHandler:
         await self._at_create(INV_MOVEMENT_TABLE, inv_fields)
 
         new_bb, new_gg = await self._get_product_stock()
-        lines = [f"✅ *{batch_id} completed — {date_label}*", ""]
-<<<<<<< Updated upstream
-        if bb: lines.append(f"🐔 BB produced: *{bb} boxes*")
-        if gg: lines.append(f"🐟 GG produced: *{gg} boxes*")
-=======
-        if bb: lines.append(f"\U0001f414 BB produced: *{bb} boxes*")
-        if gg: lines.append(f"\U0001f41f GG produced: *{gg} boxes*")
->>>>>>> Stashed changes
-        lines += ["", "*Updated stock:*", f"• BB: *{new_bb} boxes*", f"• GG: *{new_gg} boxes*"]
+        lines = [f"â *{batch_id} completed â {date_label}*", ""]
+        if bb: lines.append(f"ð BB produced: *{bb} boxes*")
+        if gg: lines.append(f"ð GG produced: *{gg} boxes*")
+        lines += ["", "*Updated stock:*", f"â¢ BB: *{new_bb} boxes*", f"â¢ GG: *{new_gg} boxes*"]
         await self._send(chat_id, "\n".join(lines), msg_id)
 
-    # ── 5. Packaging check ─────────────────────────────────────────────────────
+    # ââ 5. Packaging check âââââââââââââââââââââââââââââââââââââââââââââââââââââ
     async def _packaging_check(self, chat_id: str, msg_id: Optional[int] = None) -> None:
         pkg = await self._get_packaging_stock()
         low = [(n, q, r) for n, q, r in pkg if r is not None and q <= r]
 
         if not low:
-            lines = ["✅ *Packaging Stock — All Good*", ""]
+            lines = ["â *Packaging Stock â All Good*", ""]
             for name, qty, reorder in pkg:
-                lines.append(f"• {name}: {qty}" + (f"  _(reorder ≤ {reorder})_" if reorder else ""))
+                lines.append(f"â¢ {name}: {qty}" + (f"  _(reorder â¤ {reorder})_" if reorder else ""))
         else:
-            lines = ["⚠️ *Packaging Alert — Low Stock!*", "", "*Need to reorder:*"]
+            lines = ["â ï¸ *Packaging Alert â Low Stock!*", "", "*Need to reorder:*"]
             for name, qty, reorder in low:
-<<<<<<< Updated upstream
-                lines.append(f"• 🔴 {name}: *{qty}* (reorder at {reorder})")
+                lines.append(f"â¢ ð´ {name}: *{qty}* (reorder at {reorder})")
             lines += ["", "*Full stock:*"]
             for name, qty, reorder in pkg:
-                icon = "🔴" if reorder is not None and qty <= reorder else "🟢"
-=======
-                lines.append(f"• \U0001f534 {name}: *{qty}* (reorder at {reorder})")
-            lines += ["", "*Full stock:*"]
-            for name, qty, reorder in pkg:
-                icon = "\U0001f534" if reorder is not None and qty <= reorder else "\U0001f7e2"
->>>>>>> Stashed changes
-                lines.append(f"• {icon} {name}: {qty}")
+                icon = "ð´" if reorder is not None and qty <= reorder else "ð¢"
+                lines.append(f"â¢ {icon} {name}: {qty}")
 
         await self._send(chat_id, "\n".join(lines), msg_id)
 
     async def check_packaging_alert(self) -> None:
-<<<<<<< Updated upstream
         """
         Called automatically from fulfillment.py after packaging movements.
         Sends an alert to the ops group only if something is below reorder level.
         """
-=======
->>>>>>> Stashed changes
         pkg = await self._get_packaging_stock()
         low = [(n, q, r) for n, q, r in pkg if r is not None and q <= r]
         if low:
-            lines = ["⚠️ *Packaging Low Stock Alert*", ""]
+            lines = ["â ï¸ *Packaging Low Stock Alert*", ""]
             for name, qty, reorder in low:
-<<<<<<< Updated upstream
-                lines.append(f"• 🔴 {name}: *{qty} remaining* (reorder at {reorder})")
-=======
-                lines.append(f"• \U0001f534 {name}: *{qty} remaining* (reorder at {reorder})")
->>>>>>> Stashed changes
+                lines.append(f"â¢ ð´ {name}: *{qty} remaining* (reorder at {reorder})")
             await self._send(OPS_CHAT_ID, "\n".join(lines))
 
-    # ── Airtable data helpers ──────────────────────────────────────────────────
+    # ââ Airtable data helpers ââââââââââââââââââââââââââââââââââââââââââââââââââ
     async def _get_product_stock(self) -> tuple[int, int]:
         records = await self._at_list(
             INV_MOVEMENT_TABLE,
@@ -469,15 +379,11 @@ class InventoryHandler:
     async def _find_planned_batch(self, date_iso: str) -> Optional[dict]:
         records = await self._at_list(
             PRODUCTION_TABLE,
-<<<<<<< Updated upstream
             formula=f"AND({{Batch Date}}='{date_iso}',{{Status}}='Planned')",
-=======
-            formula=f"AND({{Batch Date}}=\'{date_iso}\',{{Status}}=\'Planned\')",
->>>>>>> Stashed changes
         )
         return records[0] if records else None
 
-    # ── Airtable HTTP ──────────────────────────────────────────────────────────
+    # ââ Airtable HTTP ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
     @property
     def _headers(self) -> dict:
         return {
@@ -487,11 +393,7 @@ class InventoryHandler:
 
     async def _at_list(self, table_id: str, fields: list[str] = None, formula: str = None) -> list[dict]:
         url    = f"{AT_API}/{INV_BASE}/{table_id}"
-<<<<<<< Updated upstream
         params: dict = {}
-=======
-        params: dict = {"returnFieldsByFieldId": "true"}
->>>>>>> Stashed changes
         if fields:  params["fields[]"] = fields
         if formula: params["filterByFormula"] = formula
         records, offset = [], None
@@ -521,7 +423,7 @@ class InventoryHandler:
             r.raise_for_status()
             return r.json()
 
-    # ── Telegram ───────────────────────────────────────────────────────────────
+    # ââ Telegram âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
     async def _send(self, chat_id: str, text: str, reply_to: Optional[int] = None) -> None:
         payload: dict = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
         if reply_to:
@@ -530,7 +432,7 @@ class InventoryHandler:
             r = await client.post(f"{TG_BASE}/sendMessage", json=payload)
             r.raise_for_status()
 
-    # ── Parsing helpers ────────────────────────────────────────────────────────
+    # ââ Parsing helpers ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
     def _extract_bb_gg(self, text: str) -> tuple[int, int]:
         lower = text.lower()
         bb = gg = 0
@@ -570,7 +472,7 @@ class InventoryHandler:
         return None
 
 
-# ── Ingredient calculator ──────────────────────────────────────────────────────
+# ââ Ingredient calculator ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 def _calc_ingredients(bb: int, gg: int) -> dict:
     return {
         "chicken_breast_kg": math.ceil((bb * 147.72 + gg * 130.25) / 1000),

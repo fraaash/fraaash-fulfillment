@@ -138,6 +138,7 @@ class AirwayBillProcessor:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for page_num, page in enumerate(pdf.pages, start=1):
                 text = page.extract_text() or ""
+                logger.info(f"PDF p{page_num} text: {text[:400]!r}")
                 awb, order_number = _extract_awb_and_order(text)
 
                 result: dict = {

@@ -267,8 +267,8 @@ class TelegramQueryHandler:
                 for r in records[:5]:
                     f = r.get("fields", {})
                     lines.append(
-                        f"• {f.get(\'Order No.\') or f.get(\'Order Number\', \'?\')} — "
-                        f"AWB: {f.get(\'Airway Bill\') or \'(not yet purchased)\'}"
+                        f"• {f.get('Order No.') or f.get('Order Number', '?')} — "
+                        f"AWB: {f.get('Airway Bill') or '(not yet purchased)'}"
                     )
                 if len(records) > 5:
                     lines.append(f"...and {len(records) - 5} more. Please add an order number.")

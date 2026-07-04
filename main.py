@@ -1,9 +1,6 @@
 import asyncio
-import json
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
-
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -18,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CURSOR_FILE = Path("webhook_cursor.json")
+# Cursor is persisted in Airtable (System Config table) — survives restarts.
 AIRWAY_BILL_POLL_INTERVAL_SECONDS = 300  # 5 minutes
 
 airtable = AirtableClient()
@@ -28,19 +25,20 @@ airway_processor = AirwayBillProcessor()
 _drain_locks: dict = {}
 
 
-def _load_cursors() -> dict:
-    if CURSOR_FILE.exists():
+async def _load_cursor(webhook_id: str):
+    """Load webhook cursor from Airtable — survives service restarts."""
+    val = await airtable.get_config(f"webhook_cursor_{webhook_id}")
+    if val is not None:
         try:
-            return json.loads(CURSOR_FILE.read_text())
-        except Exception:
-            return {}
-    return {}
+            return int(val)
+        except ValueError:
+            pass
+    return None
 
 
-def _save_cursor(webhook_id: str, cursor: int) -> None:
-    data = _load_cursors()
-    data[webhook_id] = cursor
-    CURSOR_FILE.write_text(json.dumps(data))
+async def _save_cursor(webhook_id: str, cursor: int) -> None:
+    """Persist webhook cursor to Airtable."""
+    await airtable.set_config(f"webhook_cursor_{webhook_id}", str(cursor))
 
 
 async def drain_payloads(webhook_id: str) -> None:
@@ -50,8 +48,7 @@ async def drain_payloads(webhook_id: str) -> None:
         await _do_drain(webhook_id)
 
 async def _do_drain(webhook_id: str) -> None:
-    cursors = _load_cursors()
-    cursor = cursors.get(webhook_id)
+    cursor = await _load_cursor(webhook_id)
     while True:
         data = await airtable.get_webhook_payloads(webhook_id, cursor)
         payloads = data.get("payloads", [])
@@ -63,7 +60,7 @@ async def _do_drain(webhook_id: str) -> None:
             except Exception as exc:
                 logger.error(f"Error processing payload: {exc}", exc_info=True)
         if new_cursor:
-            _save_cursor(webhook_id, new_cursor)
+            await _save_cursor(webhook_id, new_cursor)
             cursor = new_cursor
         if not might_have_more:
             break

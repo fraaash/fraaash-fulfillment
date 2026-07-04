@@ -25,6 +25,7 @@ airtable = AirtableClient()
 handler = FulfillmentHandler()
 telegram_handler = TelegramQueryHandler()
 airway_processor = AirwayBillProcessor()
+_drain_locks: dict = {}
 
 
 def _load_cursors() -> dict:
@@ -43,6 +44,12 @@ def _save_cursor(webhook_id: str, cursor: int) -> None:
 
 
 async def drain_payloads(webhook_id: str) -> None:
+    if webhook_id not in _drain_locks:
+        _drain_locks[webhook_id] = asyncio.Lock()
+    async with _drain_locks[webhook_id]:
+        await _do_drain(webhook_id)
+
+async def _do_drain(webhook_id: str) -> None:
     cursors = _load_cursors()
     cursor = cursors.get(webhook_id)
     while True:

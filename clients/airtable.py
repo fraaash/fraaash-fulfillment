@@ -153,3 +153,41 @@ class AirtableClient:
                     headers=self._headers,
                     json={"records": [{"fields": {"Key": key, "Value": value}}]},
                 )
+
+    # System Config (key-value persistence for cursor etc.)
+
+    CONFIG_TABLE_ID = "tblBezI6wEwN96A3l"
+
+    async def get_config(self, key: str):
+        """Read a value from the System Config table. Returns None if not found."""
+        url = f"{AIRTABLE_BASE}/{self._base_id}/{self.CONFIG_TABLE_ID}"
+        params = [("filterByFormula", f'{{Key}}="{key}"'), ("fields[]", "Value")]
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=self._headers, params=params)
+            resp.raise_for_status()
+            records = resp.json().get("records", [])
+            if records:
+                return records[0]["fields"].get("Value")
+        return None
+
+    async def set_config(self, key: str, value: str) -> None:
+        """Upsert a key-value pair in the System Config table."""
+        url = f"{AIRTABLE_BASE}/{self._base_id}/{self.CONFIG_TABLE_ID}"
+        params = [("filterByFormula", f'{{Key}}="{key}"'), ("fields[]", "Value")]
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=self._headers, params=params)
+            resp.raise_for_status()
+            records = resp.json().get("records", [])
+            if records:
+                rid = records[0]["id"]
+                await client.patch(
+                    f"{url}/{rid}",
+                    headers=self._headers,
+                    json={"fields": {"Value": value}},
+                )
+            else:
+                await client.post(
+                    url,
+                    headers=self._headers,
+                    json={"records": [{"fields": {"Key": key, "Value": value}}]},
+                )

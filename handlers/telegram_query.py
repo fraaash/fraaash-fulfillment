@@ -59,6 +59,8 @@ class TelegramQueryHandler:
         text     = (message.get("text") or "").strip()
         msg_id   = message.get("message_id")
 
+        logger.info(f"[TG] chat={chat_id} ops={OPS_CHAT_ID} match={chat_id==OPS_CHAT_ID} text={text!r:.80}")
+
         if chat_id == OPS_CHAT_ID:
             if self.inventory_handler.is_inventory_query(text):
                 await self.inventory_handler.handle(chat_id, msg_id, text)

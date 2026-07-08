@@ -12,13 +12,13 @@ NV_AUTH_BASE  = "https://aaa.ninjavan.co/MY"   # OAuth uses different subdomain
 
 
 class NinjaVanClient:
-    """Ninja Van Malaysia API client — handles OAuth2 and order creation."""
+    """Ninja Van Malaysia API client -- handles OAuth2 and order creation."""
 
     def __init__(self):
         self._token: str | None = None
         self._token_expiry: datetime | None = None
 
-    # ── Auth ──────────────────────────────────────────────────────────────────
+    # Auth
 
     async def _get_token(self) -> str:
         if self._token and self._token_expiry and datetime.now() < self._token_expiry:
@@ -27,12 +27,11 @@ class NinjaVanClient:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{NV_AUTH_BASE}/2.0/oauth/access_token",
-                data={
+                json={
                     "grant_type": "client_credentials",
                     "client_id": settings.NINJAVAN_CLIENT_ID,
                     "client_secret": settings.NINJAVAN_CLIENT_SECRET,
                 },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -43,7 +42,7 @@ class NinjaVanClient:
         logger.info("Ninja Van access token refreshed")
         return self._token
 
-    # ── Order creation ────────────────────────────────────────────────────────
+    # Order creation
 
     async def create_order(
         self,
@@ -56,12 +55,6 @@ class NinjaVanClient:
         parcel_description: str,
         delivery_date: str | None = None,
     ) -> tuple[str, bytes]:
-        """
-        Create a Ninja Van shipment order and download its waybill PDF.
-
-        Returns:
-            (tracking_number, pdf_bytes)
-        """
         token = await self._get_token()
         headers = {
             "Authorization": f"Bearer {token}",
@@ -122,7 +115,6 @@ class NinjaVanClient:
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # 1. Create order
             resp = await client.post(
                 f"{NV_BASE}/4.2/orders",
                 headers=headers,
@@ -131,15 +123,14 @@ class NinjaVanClient:
             resp.raise_for_status()
             order_data = resp.json()
             tracking_number: str = order_data["tracking_number"]
-            logger.info(f"Ninja Van order created — tracking: {tracking_number}")
+            logger.info(f"Ninja Van order created -- tracking: {tracking_number}")
 
-            # 2. Download waybill PDF
             pdf_resp = await client.get(
                 f"{NV_BASE}/2.0/reports/waybill",
                 headers=headers,
                 params={
-                    "tracking_ids": tracking_number,
-                    "show_shipper_details": "true",
+                    "tid": tracking_number,
+                    "hide_shipper_details": "false",
                 },
                 timeout=30.0,
             )
@@ -148,13 +139,10 @@ class NinjaVanClient:
 
         return tracking_number, pdf_bytes
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
-
     @staticmethod
     def _normalise_phone(phone: str) -> str:
-        """Ensure phone number is in +60XXXXXXXXX format."""
         if not phone:
-            return settings.SHIPPER_PHONE  # fallback
+            return settings.SHIPPER_PHONE
         p = phone.strip().replace(" ", "").replace("-", "")
         if p.startswith("0"):
             return "+60" + p[1:]

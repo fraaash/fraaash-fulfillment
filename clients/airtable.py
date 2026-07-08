@@ -41,21 +41,14 @@ class AirtableClient:
             return data
 
     async def search_orders(self, order_number: str = "", customer_name: str = "") -> list:
-        """Search Purchase Orders by order number and/or customer name.
-
-        Priority: if order_number is given, search only by that (much more precise).
-        Fall back to customer name only when no order number is provided.
-        """
+        """Search Purchase Orders by order number and/or customer name."""
         if order_number:
-            # Exact match on Order Number field (e.g. "00423")
             num_filters = [f'{{Order Number}} = "{order_number}"']
-            # Also accept without leading zeros (user types "423" instead of "00423")
             stripped = order_number.lstrip("0")
             if stripped and stripped != order_number:
                 num_filters.append(f'RIGHT({{Order Number}}, {len(stripped)}) = "{stripped}"')
             formula = f'OR({", ".join(num_filters)})'
         elif customer_name:
-            # No order number — search by customer name words (AND logic for precision)
             name_filters = []
             for word in customer_name.split():
                 if len(word) >= 2:
@@ -68,7 +61,6 @@ class AirtableClient:
         else:
             return []
         url = f"{AIRTABLE_BASE}/{self._base_id}/{TABLE_ID}"
-        # Pass fields[] as a list of tuples so httpx sends repeated params correctly
         params = [
             ("filterByFormula", formula),
             ("fields[]", "Order ID"),
@@ -85,43 +77,6 @@ class AirtableClient:
             resp = await client.get(url, headers=self._headers, params=params)
             resp.raise_for_status()
             return resp.json().get("records", [])
-
-
-    # ── System Config (key-value store for persistent state) ──────────────────
-
-    CONFIG_TABLE_ID = "tblBezI6wEwN96A3l"
-
-    async def get_config(self, key: str):
-        """Read a value from the System Config table. Returns None if not found."""
-        url = f"{self.BASE_URL}/{self.CONFIG_TABLE_ID}"
-        params = {"filterByFormula": f'{{Key}}="{key}"', "fields[]": "Value"}
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, headers=self._headers, params=params)
-            resp.raise_for_status()
-            records = resp.json().get("records", [])
-            if records:
-                return records[0]["fields"].get("Value")
-        return None
-
-    async def set_config(self, key: str, value: str) -> None:
-        """Upsert a key-value pair in the System Config table."""
-        url = f"{self.BASE_URL}/{self.CONFIG_TABLE_ID}"
-        params = {"filterByFormula": f'{{Key}}="{key}"', "fields[]": "Value"}
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, headers=self._headers, params=params)
-            resp.raise_for_status()
-            records = resp.json().get("records", [])
-            if records:
-                rid = records[0]["id"]
-                await client.patch(
-                    f"{url}/{rid}", headers=self._headers,
-                    json={"fields": {"Value": value}}
-                )
-            else:
-                await client.post(
-                    url, headers=self._headers,
-                    json={"records": [{"fields": {"Key": key, "Value": value}}]}
-                )
 
     async def search_orders_by_delivery_date(self, date_iso: str) -> list:
         """Return all Courier Required orders whose Delivery Date matches date_iso (YYYY-MM-DD)."""
@@ -160,3 +115,41 @@ class AirtableClient:
             resp = await client.get(url, headers=self._headers, params=params)
             resp.raise_for_status()
             return resp.json()
+
+    # System Config (key-value persistence for cursor etc.)
+
+    CONFIG_TABLE_ID = "tblBezI6wEwN96A3l"
+
+    async def get_config(self, key: str):
+        """Read a value from the System Config table. Returns None if not found."""
+        url = f"{AIRTABLE_BASE}/{self._base_id}/{self.CONFIG_TABLE_ID}"
+        params = [("filterByFormula", f'{{Key}}="{key}"'), ("fields[]", "Value")]
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=self._headers, params=params)
+            resp.raise_for_status()
+            records = resp.json().get("records", [])
+            if records:
+                return records[0]["fields"].get("Value")
+        return None
+
+    async def set_config(self, key: str, value: str) -> None:
+        """Upsert a key-value pair in the System Config table."""
+        url = f"{AIRTABLE_BASE}/{self._base_id}/{self.CONFIG_TABLE_ID}"
+        params = [("filterByFormula", f'{{Key}}="{key}"'), ("fields[]", "Value")]
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=self._headers, params=params)
+            resp.raise_for_status()
+            records = resp.json().get("records", [])
+            if records:
+                rid = records[0]["id"]
+                await client.patch(
+                    f"{url}/{rid}",
+                    headers=self._headers,
+                    json={"fields": {"Value": value}},
+                )
+            else:
+                await client.post(
+                    url,
+                    headers=self._headers,
+                    json={"records": [{"fields": {"Key": key, "Value": value}}]},
+                )

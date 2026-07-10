@@ -91,13 +91,14 @@ class InventoryHandler:
 
     def _detect_intent(self, lower: str, words: set) -> Optional[str]:
         # Order matters — more specific checks first
-        if self._is_production_actual(lower, words):   return "production_actual"
-        if self._is_fulfillment_query(lower, words):   return "fulfillment_query"
-        if self._is_production_suggest(lower, words):  return "production_suggest"
-        if self._is_production_plan(lower, words):     return "production_plan"
-        if self._is_inventory_out(lower, words):       return "inventory_out"
-        if self._is_packaging_check(lower, words):     return "packaging_check"
-        if self._is_stock_query(lower, words):         return "stock_query"
+        if self._is_production_actual(lower, words):         return "production_actual"
+        if self._is_fulfillment_query(lower, words):         return "fulfillment_query"
+        if self._is_production_suggest(lower, words):        return "production_suggest"
+        if self._is_production_plan_suggest(lower, words):   return "production_plan_suggest"
+        if self._is_production_plan(lower, words):           return "production_plan"
+        if self._is_inventory_out(lower, words):             return "inventory_out"
+        if self._is_packaging_check(lower, words):           return "packaging_check"
+        if self._is_stock_query(lower, words):               return "stock_query"
         return None
 
     def _is_stock_query(self, lower: str, words: set) -> bool:
@@ -141,19 +142,28 @@ class InventoryHandler:
         has_qty      = bool(re.search(r"\b\d+\b", lower))
         return has_produce and has_question and not has_qty
 
+    def _is_production_plan_suggest(self, lower: str, words: set) -> bool:
+        """Has specific quantities but also a question — show ingredients without logging."""
+        has_produce  = bool(words & PLAN_WORDS)
+        has_product  = bool(words & PRODUCT_WORDS)
+        has_qty      = bool(re.search(r"\b\d+\b", lower))
+        has_question = bool(words & SUGGEST_WORDS) or "how" in words or "what" in words or "if" in words
+        return has_produce and has_product and has_qty and has_question
+
     # ── Main dispatcher ────────────────────────────────────────────────────────
     async def handle(self, chat_id: str, msg_id: int, text: str) -> None:
         lower  = text.lower()
         words  = set(re.findall(r"[a-zA-Z]+", lower))
         intent = self._detect_intent(lower, words)
         try:
-            if intent == "stock_query":          await self._stock_query(chat_id, msg_id, text)
-            elif intent == "inventory_out":      await self._inventory_out(chat_id, msg_id, text)
-            elif intent == "production_plan":    await self._production_plan(chat_id, msg_id, text)
-            elif intent == "production_actual":  await self._production_actual(chat_id, msg_id, text)
-            elif intent == "packaging_check":    await self._packaging_check(chat_id, msg_id)
-            elif intent == "fulfillment_query":  await self._fulfillment_query(chat_id, msg_id)
-            elif intent == "production_suggest": await self._production_suggest(chat_id, msg_id)
+            if intent == "stock_query":                 await self._stock_query(chat_id, msg_id, text)
+            elif intent == "inventory_out":             await self._inventory_out(chat_id, msg_id, text)
+            elif intent == "production_plan":           await self._production_plan(chat_id, msg_id, text)
+            elif intent == "production_plan_suggest":   await self._production_plan_suggest(chat_id, msg_id, text)
+            elif intent == "production_actual":         await self._production_actual(chat_id, msg_id, text)
+            elif intent == "packaging_check":           await self._packaging_check(chat_id, msg_id)
+            elif intent == "fulfillment_query":         await self._fulfillment_query(chat_id, msg_id)
+            elif intent == "production_suggest":        await self._production_suggest(chat_id, msg_id)
             else:
                 await self._send(chat_id, (
                     "❓ I couldn't understand that. Try:\n"
@@ -370,6 +380,52 @@ class InventoryHandler:
         if gg: lines.append(f"🐟 GG produced: *{gg} boxes*")
         lines += ["", "*Updated stock:*",
                   f"• BB: *{new_bb} boxes*", f"• GG: *{new_gg} boxes*"]
+        await self._send(chat_id, "\n".join(lines), msg_id)
+
+    # ── 3b. Production plan suggestion (with quantities, no logging) ───────────
+    async def _production_plan_suggest(self, chat_id: str, msg_id: int, text: str) -> None:
+        bb, gg = self._extract_bb_gg(text)
+        if bb == 0 and gg == 0:
+            await self._send(chat_id,
+                "❓ Couldn't find quantities. Try: *if I produce 70 BB and 50 GG, what do I need?*", msg_id)
+            return
+
+        pending = await self._get_pending_orders()
+        stock_bb, stock_gg = await self._get_product_stock()
+        ing = _calc_ingredients(bb, gg)
+        eggs = math.ceil(ing["egg_yolk_kg"] * 1000 / 13)
+
+        net_bb = pending["bb"] - stock_bb - bb
+        net_gg = pending["gg"] - stock_gg - gg
+
+        lines = [
+            f"💡 *Production Preview — {bb} BB + {gg} GG* _(not logged)_",
+            "",
+            "*After production vs pending orders:*",
+            f"  • BB: {stock_bb} stock + {bb} produced − {pending['bb']} orders = *{-net_bb:+d} boxes*" if net_bb <= 0
+              else f"  • BB: still short *{net_bb} boxes* after production",
+            f"  • GG: {stock_gg} stock + {gg} produced − {pending['gg']} orders = *{-net_gg:+d} boxes*" if net_gg <= 0
+              else f"  • GG: still short *{net_gg} boxes* after production",
+            "",
+            "📋 *Ingredients needed:*",
+            "",
+            "🏭 *Han Kee Processing:*",
+            f"  • Chicken Breast: *{ing['chicken_breast_kg']} kg*",
+            f"  • Chicken Heart: *{ing['chicken_heart_kg']} kg*",
+            f"  • Chicken Liver: *{ing['chicken_liver_kg']} kg*",
+            "",
+            "🛒 *Other:*",
+            f"  • Salmon: *{ing['salmon_kg']} kg*",
+            f"  • Egg Yolk: *{ing['egg_yolk_kg']} kg* (~{eggs} eggs)",
+            f"  • Pumpkin: *{ing['pumpkin_kg']} kg*",
+            f"  • Carrot: *{ing['carrot_kg']} kg*",
+            "",
+            "📦 *Packaging:*",
+            f"  • Sleeve Labels: *{ing['sleeve_labels']} pcs*",
+            f"  • Packaging Boxes: *{ing['packaging_boxes']} pcs*",
+            "",
+            f"_(Say *plan {bb} BB {gg} GG tomorrow* to log the batch)_",
+        ]
         await self._send(chat_id, "\n".join(lines), msg_id)
 
     # ── 5. Packaging check ─────────────────────────────────────────────────────
@@ -607,13 +663,15 @@ class InventoryHandler:
         lower = text.lower()
         bb = gg = 0
         for pattern in [
-            r"(\d+)\s+(?:bb|bawk(?:\s+bawk)?|chicken(?:\s+box(?:es)?)?)",
+            r"(\d+)\s+(?:bb|bawk(?:\s+bawk)?|chicken(?:\s+box(?:es)?)?)\b",
+            r"(\d+)\s+boxes?\s+of\s+(?:bb|bawk(?:\s+bawk)?|chicken)\b",
             r"(?:bb|bawk(?:\s+bawk)?|chicken(?:\s+box(?:es)?)?)[\s:]+(\d+)",
         ]:
             m = re.search(pattern, lower)
             if m: bb = int(m.group(1)); break
         for pattern in [
-            r"(\d+)\s+(?:gg|gulu(?:\s+gulu)?|salmon(?:\s+box(?:es)?)?)",
+            r"(\d+)\s+(?:gg|gulu(?:\s+gulu)?|salmon(?:\s+box(?:es)?)?)\b",
+            r"(\d+)\s+boxes?\s+of\s+(?:gg|gulu(?:\s+gulu)?|salmon)\b",
             r"(?:gg|gulu(?:\s+gulu)?|salmon(?:\s+box(?:es)?)?)[\s:]+(\d+)",
         ]:
             m = re.search(pattern, lower)

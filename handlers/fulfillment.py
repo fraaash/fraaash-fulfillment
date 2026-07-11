@@ -192,10 +192,8 @@ class FulfillmentHandler:
         }
         if bb:
             fields["fld2O5oOrRAaABCr9"] = -bb
-            fields["fldUYRurduQ37qopd"] = bb * 6
         if gg:
             fields["fld2uxP8aLheTQwQN"] = -gg
-            fields["fldROm2Yl2Le2W7Vn"] = gg * 6
 
         url     = f"{AT_API}/{INV_BASE}/{INV_MOVEMENT_TABLE}"
         headers = {
@@ -334,4 +332,5 @@ def _is_stale_payload(payload: dict, max_age_seconds: int = 600) -> bool:
             return True
     except Exception:
         pass
-  
+    return False
+                                                                                    

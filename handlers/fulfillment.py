@@ -333,4 +333,3 @@ def _is_stale_payload(payload: dict, max_age_seconds: int = 600) -> bool:
     except Exception:
         pass
     return False
-                                                                                    

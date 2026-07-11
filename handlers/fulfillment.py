@@ -18,7 +18,7 @@ Airtable field IDs used (Purchase Orders table — tblMK2nWUx0XQIVjK):
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from clients.airtable import AirtableClient
 from clients.ninjavan import NinjaVanClient
@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 TABLE_ID = "tblMK2nWUx0XQIVjK"
+
+# Inventory base — for auto-logging Out movements when orders are delivered
+INV_BASE           = "app4Rm9ZIGWaFeCf4"
+INV_MOVEMENT_TABLE = "tblSx11BYxubiGdHk"
+AT_API             = "https://api.airtable.com/v0"
 
 # Field IDs (from Airtable webhook payloads which use IDs, not names)
 F_STATUS          = "fldFYQrIuVVZMSksf"
@@ -124,6 +129,7 @@ class FulfillmentHandler:
             record = await self.airtable.get_record(record_id)
             full   = record.get("fields", {})
 
+            # Send tracking message for courier orders
             if full.get("Collection Method") == COURIER_REQUIRED:
                 tracking_msg = full.get("Tracking No. Message", "")
                 if tracking_msg:
@@ -140,6 +146,63 @@ class FulfillmentHandler:
                         )
                 else:
                     logger.warning(f"[{record_id}] Tracking No. Message is empty — skipping Telegram")
+
+            # Auto-log inventory Out movement for all delivered orders with product quantities
+            bb = int(full.get("Chicken Quantity") or 0)
+            gg = int(full.get("Salmon Quantity") or 0)
+            order_id      = str(full.get("Order ID") or record_id)
+            delivery_date = full.get("Delivery Date") or date.today().isoformat()
+
+            if bb > 0 or gg > 0:
+                try:
+                    await self._log_inventory_out(bb, gg, order_id, delivery_date)
+                    logger.info(f"[{record_id}] Auto-logged inventory out: {bb} BB, {gg} GG for order {order_id}")
+                    if not is_stale:
+                        parts = []
+                        if bb: parts.append(f"🐔 BB: *{bb} boxes*")
+                        if gg: parts.append(f"🐟 GG: *{gg} boxes*")
+                        try:
+                            d = date.fromisoformat(delivery_date)
+                            date_label = d.strftime("%-d %B %Y")
+                        except Exception:
+                            date_label = delivery_date
+                        await self.telegram.send_message(
+                            chat_id=settings.TELEGRAM_OPS_CHAT_ID,
+                            text=(
+                                f"📦 *Inventory Out logged — {order_id}*\n"
+                                + "  |  ".join(parts)
+                                + f"\n_{date_label}_"
+                            ),
+                        )
+                except Exception as exc:
+                    logger.error(f"[{record_id}] Auto inventory-out failed: {exc}", exc_info=True)
+
+    # ── Inventory out (auto-logged on Delivered/Collected) ─────────────────────
+
+    async def _log_inventory_out(
+        self, bb: int, gg: int, order_id: str, delivery_date: str
+    ) -> None:
+        """Create an inventory Out movement in the Inventory base."""
+        fields: dict = {
+            "fldnkV4GeBZmNe8Fy": delivery_date,
+            "fldESxOVa6nglAy0J": "Out",
+            "fldkGMAzNKJzDBYCS": f"Courier delivery – {order_id}",
+        }
+        if bb:
+            fields["fld2O5oOrRAaABCr9"] = -bb
+            fields["fldUYRurduQ37qopd"] = bb * 6
+        if gg:
+            fields["fld2uxP8aLheTQwQN"] = -gg
+            fields["fldROm2Yl2Le2W7Vn"] = gg * 6
+
+        url     = f"{AT_API}/{INV_BASE}/{INV_MOVEMENT_TABLE}"
+        headers = {
+            "Authorization": f"Bearer {settings.AIRTABLE_TOKEN}",
+            "Content-Type":  "application/json",
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(url, headers=headers, json={"fields": fields})
+            r.raise_for_status()
 
     # ── Airway bill purchase ───────────────────────────────────────────────────
 

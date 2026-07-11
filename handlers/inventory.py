@@ -95,8 +95,8 @@ class InventoryHandler:
         if self._is_fulfillment_query(lower, words):         return "fulfillment_query"
         if self._is_production_suggest(lower, words):        return "production_suggest"
         if self._is_production_plan_suggest(lower, words):   return "production_plan_suggest"
-        if self._is_production_plan(lower, words):           return "production_plan"
         if self._is_inventory_out(lower, words):             return "inventory_out"
+        if self._is_production_plan(lower, words):           return "production_plan"
         if self._is_packaging_check(lower, words):           return "packaging_check"
         if self._is_stock_query(lower, words):               return "stock_query"
         return None
@@ -110,7 +110,8 @@ class InventoryHandler:
 
     def _is_inventory_out(self, lower: str, words: set) -> bool:
         OUT_WORDS = {"delivered", "deliver", "sent", "shipped", "dispatched", "courier"}
-        has_out     = bool(words & OUT_WORDS)
+        # "log X out today" is a natural way to log items going out
+        has_out     = bool(words & OUT_WORDS) or ("out" in words and "log" in words)
         has_product = bool(words & PRODUCT_WORDS)
         has_qty     = bool(re.search(r"\b\d+\b", lower))
         has_order   = bool(re.search(r"\b\d{4,6}\b", lower))

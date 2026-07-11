@@ -105,9 +105,6 @@ class FulfillmentHandler:
         prev_status = _choice(previous.get(F_STATUS))
 
         # ── Trigger 1: any status change → In Progress ────────────────────────
-        # We don't gate on prev_status == Pending because orders may start with
-        # a blank status (created via manual form) or come from another state.
-        # The Airway Bill emptiness check is the real idempotency guard.
         if curr_status == STATUS_IN_PROGRESS and prev_status != STATUS_IN_PROGRESS:
             record = await self.airtable.get_record(record_id)
             full   = record.get("fields", {})
@@ -149,7 +146,7 @@ class FulfillmentHandler:
                 else:
                     logger.warning(f"[{record_id}] Tracking No. Message is empty — skipping Telegram")
 
-            # Auto-log inventory Out movement for all delivered orders with product quantities
+            # Auto-log inventory Out movement (one aggregated line per day)
             bb = int(full.get("Chicken Quantity") or 0)
             gg = int(full.get("Salmon Quantity") or 0)
             order_id      = str(full.get("Order ID") or record_id)
@@ -157,52 +154,144 @@ class FulfillmentHandler:
 
             if bb > 0 or gg > 0:
                 try:
-                    await self._log_inventory_out(bb, gg, order_id, delivery_date)
-                    logger.info(f"[{record_id}] Auto-logged inventory out: {bb} BB, {gg} GG for order {order_id}")
-                    if not is_stale:
-                        parts = []
-                        if bb: parts.append(f"🐔 BB: *{bb} boxes*")
-                        if gg: parts.append(f"🐟 GG: *{gg} boxes*")
-                        try:
-                            d = date.fromisoformat(delivery_date)
-                            date_label = d.strftime("%-d %B %Y")
-                        except Exception:
-                            date_label = delivery_date
-                        await self.telegram.send_message(
-                            chat_id=settings.TELEGRAM_OPS_CHAT_ID,
-                            text=(
-                                f"📦 *Inventory Out logged — {order_id}*\n"
-                                + "  |  ".join(parts)
-                                + f"\n_{date_label}_"
-                            ),
+                    total_bb, total_gg, already_logged = await self._log_inventory_out(
+                        bb, gg, order_id, delivery_date
+                    )
+                    if already_logged:
+                        logger.info(f"[{record_id}] Order {order_id} already logged — skipping")
+                    else:
+                        logger.info(
+                            f"[{record_id}] Auto-logged inventory out: +{bb} BB, +{gg} GG "
+                            f"for {order_id}; daily total {total_bb} BB, {total_gg} GG"
                         )
+                        if not is_stale:
+                            parts = []
+                            if total_bb: parts.append(f"🐔 BB: *{total_bb} boxes*")
+                            if total_gg: parts.append(f"🐟 GG: *{total_gg} boxes*")
+                            try:
+                                d = date.fromisoformat(delivery_date)
+                                date_label = d.strftime("%-d %B %Y")
+                            except Exception:
+                                date_label = delivery_date
+                            await self.telegram.send_message(
+                                chat_id=settings.TELEGRAM_OPS_CHAT_ID,
+                                text=(
+                                    f"📦 *Inventory Out — {date_label}*\n"
+                                    + "  |  ".join(parts)
+                                    + f"\n_{order_id}_"
+                                ),
+                            )
                 except Exception as exc:
                     logger.error(f"[{record_id}] Auto inventory-out failed: {exc}", exc_info=True)
 
-    # ── Inventory out (auto-logged on Delivered/Collected) ─────────────────────
+    # ── Inventory out (daily upsert — one line per delivery date) ──────────────
 
     async def _log_inventory_out(
         self, bb: int, gg: int, order_id: str, delivery_date: str
-    ) -> None:
-        """Create an inventory Out movement in the Inventory base."""
-        fields: dict = {
-            "fldnkV4GeBZmNe8Fy": delivery_date,
-            "fldESxOVa6nglAy0J": "Out",
-            "fldkGMAzNKJzDBYCS": f"Courier delivery – {order_id}",
-        }
-        if bb:
-            fields["fld2O5oOrRAaABCr9"] = -bb
-        if gg:
-            fields["fld2uxP8aLheTQwQN"] = -gg
-
-        url     = f"{AT_API}/{INV_BASE}/{INV_MOVEMENT_TABLE}"
-        headers = {
+    ) -> tuple:
+        """
+        Upsert an Out movement for delivery_date, keeping ONE aggregated line per day.
+        Prevents double-logging the same order.
+        Returns (total_bb_today, total_gg_today, was_already_logged).
+        """
+        url          = f"{AT_API}/{INV_BASE}/{INV_MOVEMENT_TABLE}"
+        headers_get  = {"Authorization": f"Bearer {settings.AIRTABLE_TOKEN}"}
+        headers_json = {
             "Authorization": f"Bearer {settings.AIRTABLE_TOKEN}",
             "Content-Type":  "application/json",
         }
+        daily_desc = f"Courier deliveries – {delivery_date}"
+
         async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(url, headers=headers, json={"fields": fields})
+            # Fetch ALL courier Out records for this date
+            r = await client.get(
+                url,
+                headers=headers_get,
+                params={
+                    "filterByFormula": (
+                        f"AND({{Movement}}='Out',"
+                        f"DATESTR({{Date}})='{delivery_date}',"
+                        f"SEARCH('Courier deliver',{{Short Description}})>0)"
+                    ),
+                    "fields[]": [
+                        "fld2O5oOrRAaABCr9",   # Chicken Box
+                        "fld2uxP8aLheTQwQN",   # Salmon Box
+                        "fldkGMAzNKJzDBYCS",   # Short Description
+                        "fldHiYoKy3rgFO1Lr",   # Order Reference
+                    ],
+                    "maxRecords": "100",
+                },
+            )
             r.raise_for_status()
+            all_records = r.json().get("records", [])
+
+            # Check if this order is already logged in ANY of today's courier Out records
+            for rec in all_records:
+                f    = rec.get("fields", {})
+                ref  = f.get("Order Reference") or ""
+                desc = f.get("Short Description") or ""
+                if order_id in ref or order_id in desc:
+                    total_bb = sum(abs(int(r2.get("fields", {}).get("Chicken Box") or 0)) for r2 in all_records)
+                    total_gg = sum(abs(int(r2.get("fields", {}).get("Salmon Box") or 0)) for r2 in all_records)
+                    return total_bb, total_gg, True
+
+            # Find the daily aggregated record (if it exists)
+            daily_rec = next(
+                (rec for rec in all_records
+                 if (rec.get("fields", {}).get("Short Description") or "") == daily_desc),
+                None,
+            )
+
+            if daily_rec:
+                # Update existing daily record
+                f            = daily_rec.get("fields", {})
+                existing_bb  = abs(int(f.get("Chicken Box") or 0))
+                existing_gg  = abs(int(f.get("Salmon Box") or 0))
+                existing_ref = f.get("Order Reference") or ""
+                new_bb  = existing_bb + bb
+                new_gg  = existing_gg + gg
+                new_ref = f"{existing_ref}, {order_id}" if existing_ref else order_id
+
+                update: dict = {"fldHiYoKy3rgFO1Lr": new_ref}
+                if bb: update["fld2O5oOrRAaABCr9"] = -new_bb
+                if gg: update["fld2uxP8aLheTQwQN"] = -new_gg
+
+                r = await client.patch(
+                    f"{url}/{daily_rec['id']}",
+                    headers=headers_json,
+                    json={"fields": update},
+                )
+                r.raise_for_status()
+
+                # Total = new daily record + any old per-order records
+                other_bb = sum(
+                    abs(int(r2.get("fields", {}).get("Chicken Box") or 0))
+                    for r2 in all_records if r2["id"] != daily_rec["id"]
+                )
+                other_gg = sum(
+                    abs(int(r2.get("fields", {}).get("Salmon Box") or 0))
+                    for r2 in all_records if r2["id"] != daily_rec["id"]
+                )
+                return new_bb + other_bb, new_gg + other_gg, False
+
+            else:
+                # Create new daily record
+                fields: dict = {
+                    "fldnkV4GeBZmNe8Fy": delivery_date,
+                    "fldESxOVa6nglAy0J": "Out",
+                    "fldkGMAzNKJzDBYCS": daily_desc,
+                    "fldHiYoKy3rgFO1Lr": order_id,
+                }
+                if bb: fields["fld2O5oOrRAaABCr9"] = -bb
+                if gg: fields["fld2uxP8aLheTQwQN"] = -gg
+
+                r = await client.post(url, headers=headers_json, json={"fields": fields})
+                r.raise_for_status()
+
+                # Total = this new order + existing per-order records
+                other_bb = sum(abs(int(r2.get("fields", {}).get("Chicken Box") or 0)) for r2 in all_records)
+                other_gg = sum(abs(int(r2.get("fields", {}).get("Salmon Box") or 0)) for r2 in all_records)
+                return bb + other_bb, gg + other_gg, False
 
     # ── Airway bill purchase ───────────────────────────────────────────────────
 

@@ -20,6 +20,8 @@ import logging
 import re
 from datetime import date, datetime, timezone
 
+import httpx
+
 from clients.airtable import AirtableClient
 from clients.ninjavan import NinjaVanClient
 from clients.sharepoint import SharePointClient
@@ -332,4 +334,4 @@ def _is_stale_payload(payload: dict, max_age_seconds: int = 600) -> bool:
             return True
     except Exception:
         pass
-    return False
+  

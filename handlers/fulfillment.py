@@ -14,6 +14,9 @@ Airtable field IDs used (Purchase Orders table — tblMK2nWUx0XQIVjK):
   fldocjAjARRU1MxLW  Postcode              (multipleLookupValues)
   fldGitxGp6zLKmf13  Parcel Description    (formula)
   fld6WCGUNpodRhoYM  Delivery Date         (date)
+  fldgCjHwrrD5M8mDn  Collection Date       (date)
+  fldNBz5EEBuSvG1MA  Channel               (singleSelect)
+  fld0VyUNaxsCwLTcS  Order Received Message (formula)
 """
 
 import logging
@@ -58,6 +61,12 @@ STATUS_IN_PROGRESS = "In Progress"
 STATUS_DELIVERED   = "Delivered"
 STATUS_COLLECTED   = "Collected"
 COURIER_REQUIRED   = "Courier Required"
+
+# Trigger 3 — Order Received Message
+F_COLLECTION_DATE = "fldgCjHwrrD5M8mDn"
+F_CHANNEL         = "fldNBz5EEBuSvG1MA"
+F_ORDER_RECV_MSG  = "fld0VyUNaxsCwLTcS"
+CHANNEL_SHOPIFY   = "Shopify"
 
 
 # ── Handler ────────────────────────────────────────────────────────────────────
@@ -153,6 +162,7 @@ class FulfillmentHandler:
             delivery_date = full.get("Delivery Date") or date.today().isoformat()
 
             if bb > 0 or gg > 0:
+                customer_name = _first(full.get("Customer Name"))
                 try:
                     total_bb, total_gg, already_logged = await self._log_inventory_out(
                         bb, gg, order_id, delivery_date
@@ -165,24 +175,54 @@ class FulfillmentHandler:
                             f"for {order_id}; daily total {total_bb} BB, {total_gg} GG"
                         )
                         if not is_stale:
-                            parts = []
-                            if total_bb: parts.append(f"🐔 BB: *{total_bb} boxes*")
-                            if total_gg: parts.append(f"🐟 GG: *{total_gg} boxes*")
+                            lines = []
                             try:
                                 d = date.fromisoformat(delivery_date)
                                 date_label = d.strftime("%-d %B %Y")
                             except Exception:
                                 date_label = delivery_date
+                            lines.append(f"📦 Inventory Out — {date_label}")
+                            if total_bb: lines.append(f"🐔 BB: {total_bb} boxes")
+                            if total_gg: lines.append(f"🐟 GG: {total_gg} boxes")
+                            order_label = f"📝{order_id}"
+                            if customer_name:
+                                order_label += f" ({customer_name})"
+                            lines.append(order_label)
                             await self.telegram.send_message(
                                 chat_id=settings.TELEGRAM_OPS_CHAT_ID,
-                                text=(
-                                    f"📦 *Inventory Out — {date_label}*\n"
-                                    + "  |  ".join(parts)
-                                    + f"\n_{order_id}_"
-                                ),
+                                text="
+".join(lines),
                             )
                 except Exception as exc:
                     logger.error(f"[{record_id}] Auto inventory-out failed: {exc}", exc_info=True)
+
+        # ── Trigger 3: Collection Date updated → send Order Received Message ──
+        if F_COLLECTION_DATE in current and current.get(F_COLLECTION_DATE):
+            record = await self.airtable.get_record(record_id)
+            full   = record.get("fields", {})
+
+            if (
+                full.get("Process Status") == STATUS_PENDING
+                and full.get("Channel") == CHANNEL_SHOPIFY
+            ):
+                order_rcv_msg = full.get("Order Received Message", "")
+                if order_rcv_msg:
+                    if is_stale:
+                        logger.info(
+                            f"[{record_id}] Collection Date updated — skipping Order Received msg (stale)"
+                        )
+                    else:
+                        logger.info(
+                            f"[{record_id}] Collection Date updated (Shopify/Pending) — sending Order Received Message"
+                        )
+                        await self.telegram.send_message(
+                            chat_id=settings.TELEGRAM_OPS_CHAT_ID,
+                            text=order_rcv_msg,
+                        )
+                else:
+                    logger.info(
+                        f"[{record_id}] Collection Date updated but Order Received Message is empty — skipping"
+                    )
 
     # ── Inventory out (daily upsert — one line per delivery date) ──────────────
 
@@ -342,7 +382,7 @@ class FulfillmentHandler:
             # Save PDF → SharePoint: 7. Operation/Airway Bills/June 2026/
             month_folder = datetime.now().strftime("%B %Y")   # e.g. "June 2026"
             filename     = f"{_safe_filename(order_id)}_{tracking_number}.pdf"
-            await self.sharepoint.upload_airway_bill(
+            await self.sharepoint.upload_airway bill(
                 pdf_bytes=pdf_bytes,
                 month_folder=month_folder,
                 filename=filename,

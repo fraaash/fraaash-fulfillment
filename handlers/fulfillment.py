@@ -48,7 +48,7 @@ F_COLLECTION      = "fldkdp4L2oc3ZhcB2"
 F_AIRWAY_BILL     = "fldnLVIuIWrPZda6v"
 F_TRACKING_MSG    = "fldDOE1yMEI16z5UK"
 F_ORDER_ID        = "fldmU2FR9iN5QzBDP"
-F_CUSTOMER_NAME   = "fldEziLo8ARk98mfd"
+F_CUSTOMER_NAME   = "fldgUZRNROW1S9vBy"   # "Name (from Customer Name (1))"
 F_ADDRESS         = "fldhL2eZOtf4xbVkF"
 F_CONTACT         = "fldGpEjEeUZjqq3eu"
 F_STATE           = "fld1yu148Cuf7pC3j"
@@ -190,8 +190,7 @@ class FulfillmentHandler:
                             lines.append(order_label)
                             await self.telegram.send_message(
                                 chat_id=settings.TELEGRAM_OPS_CHAT_ID,
-                                text="
-".join(lines),
+                                text="\n".join(lines),
                             )
                 except Exception as exc:
                     logger.error(f"[{record_id}] Auto inventory-out failed: {exc}", exc_info=True)
@@ -350,23 +349,26 @@ class FulfillmentHandler:
         """
         try:
             if use_field_ids:
-                customer_name = _first(fields.get(F_CUSTOMER_NAME))
+                order_id      = str(fields.get(F_ORDER_ID) or record_id)
                 address       = _first(fields.get(F_ADDRESS))
                 contact       = _first(fields.get(F_CONTACT))
                 state         = _first(fields.get(F_STATE))
                 postcode      = _first(fields.get(F_POSTCODE))
-                order_id      = str(fields.get(F_ORDER_ID) or record_id)
                 parcel_desc   = str(fields.get(F_PARCEL_DESC) or "Pet Food")
                 delivery_date = fields.get(F_DELIVERY_DATE)
             else:
-                customer_name = _first(fields.get("Customer Name"))
+                order_id      = str(fields.get("Order ID") or record_id)
                 address       = _first(fields.get("Address"))
                 contact       = _first(fields.get("Contact"))
                 state         = _first(fields.get("State"))
                 postcode      = _first(fields.get("Postcode"))
-                order_id      = str(fields.get("Order ID") or record_id)
                 parcel_desc   = str(fields.get("Parcel Description") or "Pet Food")
                 delivery_date = fields.get("Delivery Date")
+
+            # The addressee name on the airway bill IS the Order ID, e.g.
+            # "1340 (khor jui lin)". The airway bill processor reads this back off
+            # the PDF and matches it exactly against {Order ID} in Airtable.
+            customer_name = order_id
 
             tracking_number, pdf_bytes = await self.ninjavan.create_order(
                 customer_name=customer_name,
@@ -382,7 +384,7 @@ class FulfillmentHandler:
             # Save PDF → SharePoint: 7. Operation/Airway Bills/June 2026/
             month_folder = datetime.now().strftime("%B %Y")   # e.g. "June 2026"
             filename     = f"{_safe_filename(order_id)}_{tracking_number}.pdf"
-            await self.sharepoint.upload_airway bill(
+            await self.sharepoint.upload_airway_bill(
                 pdf_bytes=pdf_bytes,
                 month_folder=month_folder,
                 filename=filename,

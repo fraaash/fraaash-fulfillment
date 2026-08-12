@@ -40,6 +40,33 @@ class AirtableClient:
             logger.info(f"Airtable record {record_id} updated: {list(fields.keys())}")
             return data
 
+    async def search_by_order_id(self, order_id: str) -> list:
+        """
+        Find a Purchase Order by its {Order ID} formula value, e.g. "1340 (khor jui lin)".
+
+        Matched case-insensitively, since the addressee text on the airway bill PDF
+        may differ in casing from what Airtable renders.
+        """
+        if not order_id:
+            return []
+        safe = order_id.replace('"', '\\"')
+        formula = f'LOWER({{Order ID}}) = LOWER("{safe}")'
+        url = f"{AIRTABLE_BASE}/{self._base_id}/{TABLE_ID}"
+        params = [
+            ("filterByFormula", formula),
+            ("fields[]", "Order ID"),
+            ("fields[]", "Order Number"),
+            ("fields[]", "Airway Bill"),
+            ("fields[]", "Process Status"),
+            ("fields[]", "Collection Method"),
+            ("fields[]", "Delivery Date"),
+            ("maxRecords", "1"),
+        ]
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=self._headers, params=params)
+            resp.raise_for_status()
+            return resp.json().get("records", [])
+
     async def search_orders(self, order_number: str = "", customer_name: str = "") -> list:
         """Search Purchase Orders by order number and/or customer name."""
         if order_number:

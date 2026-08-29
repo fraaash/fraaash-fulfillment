@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
@@ -84,6 +85,37 @@ async def _poll_airway_bills_loop() -> None:
             logger.error(f"Airway bill polling loop error: {exc}", exc_info=True)
 
 
+# Last known webhook state — exposed on /health so a silent failure is visible.
+_webhook_state: dict = {"ok": None, "id": None, "expires": None, "checked": None, "error": None}
+
+
+def _mark_webhook_ok(hook_id, expires) -> None:
+    """Record a healthy check. Fires a recovery alert if we were previously broken."""
+    was_ok = _webhook_state.get("ok")
+    _webhook_state.update({
+        "ok": True,
+        "id": hook_id,
+        "expires": expires,
+        "checked": datetime.now(timezone.utc).isoformat(),
+        "error": None,
+    })
+    if was_ok is False:
+        asyncio.create_task(_alert_ops(
+            "✅ Airtable webhook recovered — status changes are triggering again."
+        ))
+
+
+async def _alert_ops(text: str) -> None:
+    """Send an operational alert to the ops Telegram group. Never raises."""
+    try:
+        await handler.telegram.send_message(
+            chat_id=settings.TELEGRAM_OPS_CHAT_ID,
+            text=text,
+        )
+    except Exception as exc:
+        logger.error(f"Could not send ops alert: {exc}")
+
+
 async def _ensure_airtable_webhook() -> None:
     """
     Keep the Airtable webhook alive.
@@ -117,10 +149,9 @@ async def _ensure_airtable_webhook() -> None:
             if ours and ours.get("isHookEnabled"):
                 r = await client.post(f"{at_base}/{ours['id']}/refresh", headers=headers)
                 if r.status_code < 300:
-                    logger.info(
-                        f"Airtable webhook {ours['id']} refreshed — "
-                        f"expires {r.json().get('expirationTime', 'unknown')}"
-                    )
+                    exp = r.json().get("expirationTime", "unknown")
+                    logger.info(f"Airtable webhook {ours['id']} refreshed — expires {exp}")
+                    _mark_webhook_ok(ours["id"], exp)
                     return
                 logger.warning(
                     f"Airtable webhook refresh failed ({r.status_code}): {r.text} — recreating"
@@ -156,16 +187,45 @@ async def _ensure_airtable_webhook() -> None:
             r.raise_for_status()
             new_id = r.json().get("id")
             logger.info(f"✅ Airtable webhook created: {new_id} → {our_url}")
+            _mark_webhook_ok(new_id, r.json().get("expirationTime"))
 
     except Exception as exc:
         logger.error(f"Airtable webhook ensure failed: {exc}", exc_info=True)
+        # Alert only on the transition into failure, so we don't spam the group
+        # every 6 hours while something stays broken.
+        was_ok = _webhook_state.get("ok")
+        _webhook_state.update({
+            "ok": False,
+            "checked": datetime.now(timezone.utc).isoformat(),
+            "error": str(exc)[:300],
+        })
+        if was_ok is not False:
+            await _alert_ops(
+                "🚨 Airtable webhook problem\n\n"
+                "Could not refresh or recreate the Airtable webhook, so status "
+                "changes may stop triggering messages.\n\n"
+                f"Error: {str(exc)[:300]}\n\n"
+                "Check the AIRTABLE_TOKEN and the Render logs."
+            )
 
 
 async def _webhook_refresh_loop() -> None:
-    """Background task: keep the Airtable webhook alive, forever."""
+    """
+    Background task: keep the Airtable webhook alive, forever.
+
+    The body is wrapped so that no unexpected error can kill the loop — a dead
+    refresh loop would fail silently and put us straight back into the outage
+    this was written to prevent.
+    """
     while True:
-        await asyncio.sleep(WEBHOOK_REFRESH_INTERVAL_SECONDS)
-        await _ensure_airtable_webhook()
+        try:
+            await asyncio.sleep(WEBHOOK_REFRESH_INTERVAL_SECONDS)
+            await _ensure_airtable_webhook()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(f"Webhook refresh loop error (continuing): {exc}", exc_info=True)
+            await asyncio.sleep(300)
 
 
 async def _register_telegram_webhook() -> None:
@@ -202,7 +262,34 @@ app = FastAPI(title="Fraaash Fulfillment Automation", lifespan=lifespan)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "fraaash-fulfillment"}
+    """
+    Health + webhook status.
+
+    `airtable_webhook.hours_left` is the number to watch: it should never fall
+    much below ~162 (7 days minus one 6-hour refresh cycle). If it is dropping
+    toward zero, refreshes have stopped and triggers are about to go silent.
+    """
+    hours_left = None
+    exp = _webhook_state.get("expires")
+    if exp:
+        try:
+            delta = datetime.fromisoformat(str(exp).replace("Z", "+00:00")) - datetime.now(timezone.utc)
+            hours_left = round(delta.total_seconds() / 3600, 1)
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "service": "fraaash-fulfillment",
+        "airtable_webhook": {
+            "healthy":     _webhook_state.get("ok"),
+            "id":          _webhook_state.get("id"),
+            "expires":     exp,
+            "hours_left":  hours_left,
+            "last_checked": _webhook_state.get("checked"),
+            "error":       _webhook_state.get("error"),
+        },
+    }
 
 
 @app.post("/webhook/airtable")

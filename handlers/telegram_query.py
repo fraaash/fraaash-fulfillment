@@ -62,7 +62,11 @@ class TelegramQueryHandler:
         logger.info(f"[TG] chat={chat_id} ops={OPS_CHAT_ID} match={chat_id==OPS_CHAT_ID} text={text!r:.80}")
 
         if chat_id == OPS_CHAT_ID:
-            if self.inventory_handler.is_inventory_query(text):
+            # Route on "looks inventory related" rather than "intent resolved",
+            # so a stock/production message we can't parse gets the help card
+            # instead of being forwarded away and silently disappearing.
+            if (self.inventory_handler.is_inventory_query(text)
+                    or self.inventory_handler.looks_inventory_related(text)):
                 await self.inventory_handler.handle(chat_id, msg_id, text)
             elif self._is_update_query(text):
                 await self._answer_update_query(chat_id, msg_id, text)

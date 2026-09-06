@@ -65,6 +65,9 @@ PRODUCT_WORDS   = {"bawk", "gulu", "chicken", "salmon", "bb", "gg"}
 PACKAGING_WORDS = {"foam", "sleeve", "label", "packaging", "ice", "tape", "card"}
 PLAN_WORDS      = {"plan", "produce", "production", "batch", "planning", "prepare",
                    "preparing", "log", "schedule", "create"}
+# Words that unambiguously mean "production planning". Excludes the generic
+# "log"/"create", which show up in unrelated messages like "create order 1234".
+PRODUCTION_INTENT_WORDS = PLAN_WORDS - {"log", "create"}
 PRODUCED_WORDS  = {"produced", "completed", "done", "finished", "actual"}
 PKG_CHECK_WORDS = {"check", "alert", "low", "reorder"}
 FULFILL_WORDS   = {"fulfill", "fulfil", "fulfillment", "fulfilment", "outstanding"}
@@ -99,6 +102,10 @@ class InventoryHandler:
         if self._is_production_plan(lower, words):           return "production_plan"
         if self._is_packaging_check(lower, words):           return "packaging_check"
         if self._is_stock_query(lower, words):               return "stock_query"
+        # Checked last: a production request that names no product/quantity,
+        # e.g. "plan production on 3 Sep". Previously this matched nothing and
+        # the message was silently dropped.
+        if self._is_production_plan_bare(lower, words):      return "production_suggest"
         return None
 
     def _is_stock_query(self, lower: str, words: set) -> bool:
@@ -122,6 +129,25 @@ class InventoryHandler:
         has_product = bool(words & PRODUCT_WORDS)
         has_qty     = bool(re.search(r"\b\d+\b", lower))
         return has_plan and has_product and has_qty
+
+    def _is_production_plan_bare(self, lower: str, words: set) -> bool:
+        """
+        A production request with no product named, e.g. "plan production on
+        3 Sep" or "plan for production tomorrow". We can't log a batch without
+        quantities, so we answer with a suggestion for that date instead.
+        """
+        return bool(words & PRODUCTION_INTENT_WORDS) and not bool(words & PRODUCT_WORDS)
+
+    def looks_inventory_related(self, text: str) -> bool:
+        """
+        True if the message is *about* stock/production/packaging, even when we
+        cannot work out the exact intent. Used so an unparseable inventory
+        message gets a helpful reply instead of vanishing.
+        """
+        words = set(re.findall(r"[a-zA-Z]+", text.lower()))
+        return bool(words & (STOCK_WORDS | PRODUCT_WORDS | PACKAGING_WORDS
+                             | PRODUCTION_INTENT_WORDS | PRODUCED_WORDS
+                             | FULFILL_WORDS))
 
     def _is_production_actual(self, lower: str, words: set) -> bool:
         return (bool(words & PRODUCED_WORDS)
@@ -164,7 +190,7 @@ class InventoryHandler:
             elif intent == "production_actual":         await self._production_actual(chat_id, msg_id, text)
             elif intent == "packaging_check":           await self._packaging_check(chat_id, msg_id)
             elif intent == "fulfillment_query":         await self._fulfillment_query(chat_id, msg_id)
-            elif intent == "production_suggest":        await self._production_suggest(chat_id, msg_id)
+            elif intent == "production_suggest":        await self._production_suggest(chat_id, msg_id, text)
             else:
                 await self._send(chat_id, (
                     "❓ I couldn't understand that. Try:\n"
@@ -391,8 +417,22 @@ class InventoryHandler:
                 "❓ Couldn't find quantities. Try: *if I produce 70 BB and 50 GG, what do I need?*", msg_id)
             return
 
-        pending = await self._get_pending_orders()
+        target     = self._extract_date(text) if text else None
+        date_iso   = target.isoformat() if target else None
+        date_label = target.strftime("%-d %B %Y") if target else None
+
+        pending = await self._get_pending_orders(date_iso)
         stock_bb, stock_gg = await self._get_product_stock()
+
+        if date_label and pending["bb"] == 0 and pending["gg"] == 0:
+            await self._send(chat_id, (
+                f"📋 *Production Plan — {date_label}*\n\n"
+                f"No pending orders are due for delivery on {date_label}, "
+                "so nothing needs producing for that date.\n\n"
+                "_(Say *how much should I produce* for all outstanding orders, "
+                "or *plan 50 BB 50 GG on 3 Sep* to log a batch directly.)_"
+            ), msg_id)
+            return
         ing = _calc_ingredients(bb, gg)
         eggs = math.ceil(ing["egg_yolk_kg"] * 1000 / 13)
 
@@ -508,7 +548,7 @@ class InventoryHandler:
         await self._send(chat_id, "\n".join(lines), msg_id)
 
     # ── 7. Production suggestion (no logging) ──────────────────────────────────
-    async def _production_suggest(self, chat_id: str, msg_id: int) -> None:
+    async def _production_suggest(self, chat_id: str, msg_id: int, text: str = "") -> None:
         pending = await self._get_pending_orders()
         stock_bb, stock_gg = await self._get_product_stock()
 
@@ -516,9 +556,10 @@ class InventoryHandler:
         suggest_gg = max(0, pending["gg"] - stock_gg)
 
         lines = [
-            "💡 *Production Suggestion*",
+            (f"💡 *Production Suggestion — {date_label}*" if date_label
+             else "💡 *Production Suggestion*"),
             "",
-            "*Pending orders:*",
+            f"*Pending orders{' for ' + date_label if date_label else ''}:*",
             f"  • BB: {pending['bb']} boxes",
             f"  • GG: {pending['gg']} boxes",
             "",
@@ -580,11 +621,23 @@ class InventoryHandler:
             for m in mats
         ]
 
-    async def _get_pending_orders(self) -> dict:
+    async def _get_pending_orders(self, date_iso: Optional[str] = None) -> dict:
+        """
+        Sum pending BB/GG quantities.
+
+        With `date_iso`, only orders due for delivery on that date are counted —
+        which is what "plan production for 3 Sep" actually means.
+        """
+        formula = "{Process Status}='Pending'"
+        if date_iso:
+            formula = (
+                f"AND({{Process Status}}='Pending', "
+                f"DATESTR({{Delivery Date}})='{date_iso}')"
+            )
         records = await self._at_list_sales(
             SALES_PO_TABLE,
             fields=["fldplB5HEpbt6rrBU", "fldg2x7JWkHLcVLRC"],
-            formula="{Process Status}='Pending'",
+            formula=formula,
         )
         bb = sum(int(r.get("fields", {}).get("fldplB5HEpbt6rrBU") or 0) for r in records)
         gg = sum(int(r.get("fields", {}).get("fldg2x7JWkHLcVLRC") or 0) for r in records)
